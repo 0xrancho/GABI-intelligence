@@ -4,10 +4,9 @@ import fs from 'fs/promises';
 import path from 'path';
 import { scoringCriteria, joelProfile } from '@/lib/scoring';
 
-// Initialize OpenAI only if API key is available
-const openai = process.env.OPENAI_API_KEY ? new OpenAI({
+const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
-}) : null;
+});
 
 interface ConversationMessage {
   role: 'system' | 'user' | 'assistant';
@@ -21,14 +20,6 @@ async function loadDocument(filename: string): Promise<string> {
 
 export async function POST(request: NextRequest) {
   try {
-    // Check if OpenAI is available
-    if (!openai) {
-      return NextResponse.json(
-        { error: 'OpenAI API key not configured' },
-        { status: 500 }
-      );
-    }
-
     const { messages } = await request.json();
 
     // Load reference documents
@@ -58,13 +49,6 @@ async function handleConversation(
   messages: ConversationMessage[],
   context: { gabiPersonality: string; portfolioProofs: string; fitTemplate: string }
 ) {
-  if (!openai) {
-    return NextResponse.json(
-      { error: 'OpenAI API key not configured' },
-      { status: 500 }
-    );
-  }
-
   const systemPrompt = buildUnifiedSystemPrompt(context);
   
   const response = await openai.chat.completions.create({
@@ -260,4 +244,4 @@ Use the structured template and scoring process when:
 For general questions about Joel's experience, skills, or background, respond conversationally without the template.
 
 Always be helpful, direct, and reference specific portfolio examples when relevant.`;
-}
+} 

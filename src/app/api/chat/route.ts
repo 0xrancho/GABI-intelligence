@@ -3,6 +3,7 @@ import OpenAI from 'openai';
 import fs from 'fs/promises';
 import path from 'path';
 import { scoringCriteria, joelProfile } from '@/lib/scoring';
+import { RateLimiter } from '@/middleware/rateLimiter';
 
 // Add CORS headers function
 function corsHeaders() {
@@ -38,6 +39,29 @@ async function loadDocument(filename: string): Promise<string> {
 export async function POST(request: NextRequest) {
   try {
     const { messages } = await request.json();
+    
+    // Validate messages array
+    if (!Array.isArray(messages) || messages.length === 0) {
+      return NextResponse.json(
+        { error: 'Invalid messages format' },
+        { status: 400, headers: corsHeaders() }
+      );
+    }
+
+    // Get the latest user message for rate limiting
+    const latestMessage = messages[messages.length - 1];
+    const messageText = latestMessage?.content || '';
+
+    // Check rate limits
+    const rateLimitResponse = await RateLimiter.checkLimits(
+      request, 
+      messageText, 
+      corsHeaders()
+    );
+    
+    if (rateLimitResponse) {
+      return rateLimitResponse;
+    }
 
     // Load reference documents
     const [gabiPersonality, portfolioProofs, fitTemplate] = await Promise.all([
@@ -47,11 +71,14 @@ export async function POST(request: NextRequest) {
     ]);
 
     // Single conversation mode - GABI decides when to use fit analysis
-    return await handleConversation(messages, {
+    const response = await handleConversation(messages, {
       gabiPersonality,
       portfolioProofs,
       fitTemplate
     });
+
+    // Add rate limit headers to successful response
+    return RateLimiter.addRateLimitHeaders(response, request, messageText);
 
   } catch (error) {
     console.error('Chat API Error:', error);

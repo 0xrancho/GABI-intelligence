@@ -4,6 +4,23 @@ import fs from 'fs/promises';
 import path from 'path';
 import { scoringCriteria, joelProfile } from '@/lib/scoring';
 
+// Add CORS headers function
+function corsHeaders() {
+  return {
+    'Access-Control-Allow-Origin': '*', // or 'https://joelaustin.xyz'
+    'Access-Control-Allow-Methods': 'POST, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type',
+  };
+}
+
+// Handle OPTIONS preflight
+export async function OPTIONS() {
+  return new NextResponse(null, {
+    status: 200,
+    headers: corsHeaders(),
+  });
+}
+
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
@@ -40,7 +57,7 @@ export async function POST(request: NextRequest) {
     console.error('Chat API Error:', error);
     return NextResponse.json(
       { error: 'Internal server error' },
-      { status: 500 }
+      { status: 500, headers: corsHeaders() }
     );
   }
 }
@@ -129,13 +146,13 @@ async function handleConversation(
           
         return NextResponse.json({ 
           message: finalMessage
-        });
+        }, { headers: corsHeaders() });
         
       } catch (error) {
         console.error('Error fetching URL:', error);
         return NextResponse.json({ 
           message: "I had trouble accessing that URL. Could you copy and paste the content instead?"
-        });
+        }, { headers: corsHeaders() });
       }
     }
   }
@@ -145,7 +162,7 @@ async function handleConversation(
 
   return NextResponse.json({ 
     message: finalMessage
-  });
+  }, { headers: corsHeaders() });
 }
 
 function buildUnifiedSystemPrompt(context: { gabiPersonality: string; portfolioProofs: string; fitTemplate: string }): string {

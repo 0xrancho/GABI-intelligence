@@ -6,13 +6,13 @@ export default function Home() {
       <div className="max-w-4xl mx-auto">
         <div className="text-center mb-8">
           <h1 className="text-4xl font-bold text-gray-900 mb-4">
-            Joel Austin AI Interviewer
+            GABI Qualify
           </h1>
           <p className="text-xl text-gray-600 mb-2">
-            GTM Product Strategy • AI Sales Enablement • Cross-Functional Innovation
+            AI Qualification Agent • Calendar Integration • Lead Management
           </p>
           <p className="text-gray-500">
-            Chat with GABI to explore opportunities and assess project fit
+            Chat with GABI to explore opportunities and book meetings
           </p>
         </div>
         
@@ -21,7 +21,7 @@ export default function Home() {
         </div>
         
         <div className="mt-12 text-center text-sm text-gray-400">
-          <p>This is a test environment for Joel's AI screening system</p>
+          <p>GABI Qualify - AI-powered qualification with integrated booking</p>
         </div>
       </div>
     </div>

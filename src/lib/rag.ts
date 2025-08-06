@@ -102,6 +102,36 @@ async function loadResumeVariants(dataDir: string): Promise<Array<{title: string
   }
 }
 
+export async function getJoelBusinessContext(): Promise<string> {
+  const dataDir = path.join(process.cwd(), 'data');
+  
+  try {
+    // Load portfolio proofs for credibility examples
+    const portfolioPath = path.join(dataDir, 'portfolio-proofs.csv');
+    const portfolioData = await fs.readFile(portfolioPath, 'utf8');
+    
+    // Extract key success metrics and examples (first 3 rows)
+    const lines = portfolioData.split('\n').slice(0, 4); // header + 3 examples
+    const relevantExamples = lines.join('\n');
+    
+    return `JOEL'S EXPERTISE:
+AI-enabled GTM sales ops & product strategy for B2B SaaS, growth companies, professional services.
+
+SPECIALIZES IN: GTM optimization, CRM/Salesforce automation, AI integration, revenue operations, sales velocity systems.
+
+KEY SUCCESS EXAMPLES:
+${relevantExamples}
+
+CONTACT: joel@commitimpact.com`;
+    
+  } catch (error) {
+    // Fallback if file read fails
+    return `JOEL'S EXPERTISE:
+AI-enabled GTM sales ops & product strategy. Builds systems that accelerate sales velocity and optimize revenue operations.
+CONTACT: joel@commitimpact.com`;
+  }
+}
+
 // Simple vector search function (for future enhancement)
 export function searchRAGData(query: string, ragData: RAGData): string[] {
   const searchTerms = query.toLowerCase().split(' ');

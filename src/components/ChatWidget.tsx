@@ -2,6 +2,7 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import { Send, Bot, User } from 'lucide-react';
+import { leadCaptureUtils } from '@/lib/leadCapture';
 
 interface Message {
   role: 'user' | 'assistant';
@@ -107,7 +108,7 @@ const formatAnalysisContent = (content: string) => {
 };
 
 // Function to render message content with calendar button for recommendations
-const renderMessageContent = (content: string) => {
+const renderMessageContent = (content: string, sessionId?: string, qualificationScore?: number) => {
   // Check if this is a recommendation message that should show a calendar button
   const isRecommendation = content.includes('## Recommendation:') || 
                           content.includes('SCHEDULE') ||
@@ -141,6 +142,15 @@ const renderMessageContent = (content: string) => {
             target="_blank" 
             rel="noopener noreferrer"
             className="inline-flex items-center px-4 py-2 bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-700 transition-colors shadow-sm text-sm"
+            onClick={() => {
+              // Track calendar click for lead capture
+              if (typeof window !== 'undefined' && window.gtag) {
+                window.gtag('event', 'calendar_click', {
+                  session_id: sessionId,
+                  qualification_score: qualificationScore
+                });
+              }
+            }}
           >
             Schedule a Call
             <svg className="ml-2 w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -160,13 +170,16 @@ export default function ChatWidget({ isEmbedded = false, onClose }: ChatWidgetPr
   const [messages, setMessages] = useState<Message[]>([
     {
       role: 'assistant',
-      content: "Hi! I'm GABI, Joel's AI assistant. I help screen potential opportunities and partnerships. What kind of project or role are you exploring?",
+      content: "Hi! I'm GABI, your AI qualification assistant. I help screen opportunities, assess project fit, and can book meetings directly. What kind of project or opportunity are you exploring?",
       timestamp: new Date()
     }
   ]);
   
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [sessionId, setSessionId] = useState<string>('');
+  const [qualificationScore, setQualificationScore] = useState<number>(0);
+  const [contactInfo, setContactInfo] = useState<any>({});
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -180,11 +193,66 @@ export default function ChatWidget({ isEmbedded = false, onClose }: ChatWidgetPr
   }, [messages]);
 
   useEffect(() => {
-    // Focus input when widget opens
+    // Initialize session and focus input when widget opens
+    const session = leadCaptureUtils.initSession();
+    setSessionId(session.sessionId);
+    
     if (inputRef.current) {
       inputRef.current.focus();
     }
   }, []);
+
+  // Update lead capture with each message exchange
+  const updateLeadCapture = async (newMessages: Message[]) => {
+    if (!sessionId) return;
+
+    try {
+      // Add messages to local session
+      newMessages.forEach(msg => {
+        leadCaptureUtils.addMessage(sessionId, msg.role, msg.content);
+      });
+
+      // Extract any new contact info
+      const extractedInfo = leadCaptureUtils.extractContactInfo(sessionId);
+      if (Object.keys(extractedInfo).length > 0) {
+        setContactInfo(prev => ({ ...prev, ...extractedInfo }));
+      }
+
+      // Update qualification score
+      const score = leadCaptureUtils.getQualificationScore(sessionId);
+      setQualificationScore(score);
+
+      // Send to Airtable API
+      await fetch('/api/airtable/leads', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sessionId,
+          contactInfo: extractedInfo,
+          conversationHistory: newMessages,
+          action: 'update_session'
+        })
+      });
+
+      // Mark calendar interactions when calendar is shown
+      const lastMessage = newMessages[newMessages.length - 1];
+      if (lastMessage?.role === 'assistant' && 
+          (lastMessage.content.includes('Schedule a Call') || lastMessage.content.includes('calendly'))) {
+        await fetch('/api/airtable/leads', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            sessionId,
+            action: 'calendar_sent'
+          })
+        });
+      }
+
+    } catch (error) {
+      console.error('Lead capture update failed:', error);
+      // Don't block the conversation if lead capture fails
+    }
+  };
 
   const sendMessage = async (messageContent: string) => {
     if (!messageContent.trim()) return;
@@ -192,21 +260,27 @@ export default function ChatWidget({ isEmbedded = false, onClose }: ChatWidgetPr
     setIsLoading(true);
     
     // Add user message
-    const newMessages = [...messages, { role: 'user' as const, content: messageContent, timestamp: new Date() }];
-    setMessages(newMessages);
+    const userMessage = { role: 'user' as const, content: messageContent, timestamp: new Date() };
+    const messagesWithUser = [...messages, userMessage];
+    setMessages(messagesWithUser);
     setInput('');
 
     try {
+      // Get capture suggestion for AI context
+      const captureStrategy = sessionId ? leadCaptureUtils.getNextCapture(sessionId) : null;
+      
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          messages: newMessages.map(msg => ({
+          messages: messagesWithUser.map(msg => ({
             role: msg.role,
             content: msg.content
-          }))
+          })),
+          sessionId,
+          captureHint: captureStrategy?.priority === 'high' ? captureStrategy.message : undefined
         }),
       });
 
@@ -217,11 +291,17 @@ export default function ChatWidget({ isEmbedded = false, onClose }: ChatWidgetPr
       }
 
       // Add GABI's response to conversation
-      setMessages(prev => [...prev, {
-        role: 'assistant',
+      const assistantMessage = {
+        role: 'assistant' as const,
         content: data.message,
         timestamp: new Date()
-      }]);
+      };
+      
+      const finalMessages = [...messagesWithUser, assistantMessage];
+      setMessages(finalMessages);
+
+      // Update lead capture system
+      await updateLeadCapture(finalMessages);
 
     } catch (error) {
       console.error('Error sending message:', error);
@@ -248,9 +328,23 @@ export default function ChatWidget({ isEmbedded = false, onClose }: ChatWidgetPr
           <Bot className="w-5 h-5 text-blue-600" />
           <div>
             <h3 className="font-medium text-gray-900">GABI</h3>
-            <p className="text-xs text-gray-600">Joel's AI Assistant</p>
+            <p className="text-xs text-gray-600">AI Qualification Assistant</p>
           </div>
         </div>
+        
+        {/* Qualification Score Indicator */}
+        {qualificationScore > 0 && (
+          <div className="flex items-center gap-2">
+            <div className="text-xs text-gray-600">Score:</div>
+            <div className={`text-xs font-semibold px-2 py-1 rounded-full ${
+              qualificationScore >= 60 ? 'bg-green-100 text-green-800' :
+              qualificationScore >= 30 ? 'bg-yellow-100 text-yellow-800' :
+              'bg-gray-100 text-gray-600'
+            }`}>
+              {qualificationScore}/100
+            </div>
+          </div>
+        )}
         {onClose && (
           <button
             onClick={onClose}
@@ -282,7 +376,7 @@ export default function ChatWidget({ isEmbedded = false, onClose }: ChatWidgetPr
               }`}
             >
               {message.role === 'assistant' ? (
-                renderMessageContent(message.content)
+                renderMessageContent(message.content, sessionId, qualificationScore)
               ) : (
                 <>
                   <p className="text-sm whitespace-pre-wrap">{message.content}</p>

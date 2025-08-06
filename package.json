@@ -1,6 +1,7 @@
 {
-  "name": "joel-ai-interviewer",
+  "name": "gabi-qualify",
   "version": "0.1.0",
+  "description": "AI qualification agent with integrated calendar booking and lead management",
   "private": true,
   "scripts": {
     "dev": "next dev --turbopack",
@@ -9,7 +10,9 @@
     "lint": "next lint"
   },
   "dependencies": {
+    "airtable": "^0.12.2",
     "csv-parser": "^3.2.0",
+    "googleapis": "^144.0.0",
     "lucide-react": "^0.525.0",
     "next": "15.4.4",
     "openai": "^5.10.2",

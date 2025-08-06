@@ -1,0 +1,11 @@
+# GABI Qualify Development Rules
+
+You are implementing the GABI Qualify AI qualification agent.
+
+ALWAYS:
+1. Check QA-LOG.md before making changes
+2. Run actual tests, don't simulate
+3. Log real output, not expected output
+4. Keep fixes minimal (under 10 lines when possible)
+
+Current Focus: Fix function calling error in handleAgenticConversation()

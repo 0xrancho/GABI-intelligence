@@ -63,10 +63,15 @@ export class RateLimiter {
 
     switch (result.type) {
       case 'requests':
-        message = `Too many requests. You've exceeded the limit of ${result.limit} messages per hour.`;
-        retryInfo = retryAfterHours >= 1 
-          ? `Try again in ${retryAfterHours} hour${retryAfterHours > 1 ? 's' : ''}.`
-          : `Try again in ${retryAfterMinutes} minute${retryAfterMinutes > 1 ? 's' : ''}.`;
+        message = `Too many requests. You've exceeded the limit of ${result.limit} messages per minute.`;
+        retryInfo = retryAfterMinutes >= 1 
+          ? `Try again in ${retryAfterMinutes} minute${retryAfterMinutes > 1 ? 's' : ''}.`
+          : `Try again in ${retryAfterSeconds} second${retryAfterSeconds > 1 ? 's' : ''}.`;
+        break;
+      
+      case 'burst':
+        message = `Too many rapid requests. Slow down your clicking!`;
+        retryInfo = `Try again in ${retryAfterSeconds} second${retryAfterSeconds > 1 ? 's' : ''}.`;
         break;
       
       case 'tokens':
@@ -77,8 +82,10 @@ export class RateLimiter {
         break;
       
       case 'sessions':
-        message = `Too many concurrent sessions. Maximum ${result.limit} sessions allowed per IP address.`;
-        retryInfo = 'Please close an existing session before starting a new one.';
+        message = `Too many requests. Go touch grass and come back later, or schedule directly with Joel at https://calendly.com/joelaustin/30min.`;
+        retryInfo = retryAfterHours >= 1 
+          ? `Daily limit resets in ${retryAfterHours} hour${retryAfterHours > 1 ? 's' : ''}.`
+          : `Daily limit resets in ${retryAfterMinutes} minute${retryAfterMinutes > 1 ? 's' : ''}.`;
         break;
       
       default:
@@ -111,15 +118,18 @@ export class RateLimiter {
     const sessionId = this.getSessionId(request);
     const estimatedTokens = rateLimitStore.estimateTokens(messageText);
 
-    // Check request limit (messages per hour)
+    // Check request limit (includes burst protection)
     const requestCheck = rateLimitStore.checkRequestLimit(ip);
     if (!requestCheck.allowed) {
+      const config = rateLimitStore.getConfig();
+      // Determine if this is a burst limit or regular request limit
+      const isBurstLimit = requestCheck.resetTime <= Date.now() + config.requests.burstWindowMs;
       const result: RateLimitResult = {
         allowed: false,
         resetTime: requestCheck.resetTime,
         remaining: requestCheck.remaining,
-        limit: rateLimitStore.getConfig().requests.limit,
-        type: 'requests',
+        limit: isBurstLimit ? config.requests.burstLimit : config.requests.limit,
+        type: isBurstLimit ? 'burst' : 'requests',
       };
       return this.createRateLimitResponse(result, corsHeaders);
     }

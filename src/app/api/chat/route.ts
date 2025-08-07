@@ -596,7 +596,7 @@ async function handleAgenticConversation(
   const ragData = await loadNaturalRAGData(gapAnalysis, context.sessionState);
   
   // Build natural, descriptive system prompt
-  const systemPrompt = buildNaturalSystemPrompt(gapAnalysis, context.sessionState, ragData);
+  const systemPrompt = buildNaturalSystemPrompt(gapAnalysis, context.sessionState, ragData, scoringCriteria);
   
   // Load contextually appropriate tools
   const tools = getNaturalTools(gapAnalysis);
@@ -799,80 +799,108 @@ function getNaturalTools(gapAnalysis: any): any[] {
   
   // Handle function calls with full agentic processing
   if (assistantMessage?.tool_calls) {
-    const toolCall = assistantMessage.tool_calls[0];
-    const functionName = toolCall.function.name;
-    const functionArgs = JSON.parse(toolCall.function.arguments);
+    console.log('=== DEBUGGING FUNCTION CALL STRUCTURE ===');
+    console.log('Total Tool Calls:', assistantMessage.tool_calls.length);
+    assistantMessage.tool_calls.forEach((call, index) => {
+      console.log(`Tool Call ${index + 1}: ID=${call.id}, Function=${call.function.name}`);
+    });
+    console.log('=== END DEBUG ===');
     
-    let toolResult = '';
+    // Process ALL tool calls, not just the first one
+    const toolResponses = [];
     
-    try {
-      switch (functionName) {
-        case 'capture_anything':
-          toolResult = await handleNaturalCapture(functionArgs, context.sessionId);
-          break;
-          
-        case 'share_relevant_experience':
-          toolResult = await handleRelevantExperience(functionArgs, context.sessionId);
-          break;
-          
-        case 'assess_fit_naturally':
-          toolResult = await handleNaturalFitAssessment(functionArgs, context.sessionId);
-          break;
-          
-        case 'facilitate_scheduling':
-          toolResult = await handleSchedulingFacilitation(functionArgs, context.sessionId);
-          break;
-          
-        case 'check_calendar_availability':
-          toolResult = await handleCalendarAvailability(functionArgs, context.sessionId);
-          break;
-          
-        case 'book_calendar_meeting':
-          toolResult = await handleCalendarBooking(functionArgs, context.sessionId);
-          break;
-          
-        case 'save_conversation_to_crm':
-          toolResult = await handleStrategicCRMSave(functionArgs, context.sessionId);
-          break;
-          
-        default:
-          toolResult = `Function ${functionName} processed.`;
-      }
+    for (const toolCall of assistantMessage.tool_calls) {
+      const functionName = toolCall.function.name;
+      const functionArgs = JSON.parse(toolCall.function.arguments);
       
-      // Continue conversation with function result
-      const followUpMessages = [
-        ...contextualMessages,
-        { 
-          role: 'assistant', 
-          content: assistantMessage.content || null,
-          tool_calls: assistantMessage.tool_calls 
-        },
-        {
+      let toolResult = '';
+      
+      try {
+        switch (functionName) {
+          case 'capture_anything':
+            toolResult = await handleNaturalCapture(functionArgs, context.sessionId);
+            break;
+            
+          case 'share_relevant_experience':
+            toolResult = await handleRelevantExperience(functionArgs, context.sessionId);
+            break;
+            
+          case 'assess_fit_naturally':
+            toolResult = await handleNaturalFitAssessment(functionArgs, context.sessionId);
+            break;
+            
+          case 'facilitate_scheduling':
+            toolResult = await handleSchedulingFacilitation(functionArgs, context.sessionId);
+            break;
+            
+          case 'check_calendar_availability':
+            toolResult = await handleCalendarAvailability(functionArgs, context.sessionId);
+            break;
+            
+          case 'book_calendar_meeting':
+            toolResult = await handleCalendarBooking(functionArgs, context.sessionId);
+            break;
+            
+          case 'save_conversation_to_crm':
+            toolResult = await handleStrategicCRMSave(functionArgs, context.sessionId);
+            break;
+            
+          default:
+            toolResult = `Function ${functionName} processed.`;
+        }
+        
+        // Add tool response for this specific call
+        toolResponses.push({
           role: 'tool',
           tool_call_id: toolCall.id,
           content: toolResult
-        }
-      ];
+        });
+        
+      } catch (error) {
+        console.error(`Error handling function ${functionName}:`, error);
+        toolResponses.push({
+          role: 'tool',
+          tool_call_id: toolCall.id,
+          content: `Error processing ${functionName}`
+        });
+      }
+    }
+      
+    // Continue conversation with function results
+    const followUpMessages = [
+      ...contextualMessages,
+      { 
+        role: 'assistant', 
+        content: assistantMessage.content || null,
+        tool_calls: assistantMessage.tool_calls 
+      },
+      ...toolResponses // Add ALL tool responses
+    ];
 
-      console.log('=== DEBUGGING FUNCTION CALL STRUCTURE ===');
-      console.log('Tool Call ID from OpenAI:', toolCall.id);
-      console.log('Tool Call Response ID:', toolCall.id);
-      console.log('Follow-up Messages Length:', followUpMessages.length);
-      console.log('Last Message Role:', followUpMessages[followUpMessages.length - 1].role);
-      console.log('=== END DEBUG ===');
+    console.log('=== FINAL MESSAGE STRUCTURE ===');
+    console.log('Follow-up Messages Length:', followUpMessages.length);
+    console.log('Tool Responses Added:', toolResponses.length);
+    followUpMessages.forEach((msg, index) => {
+      if (msg.role === 'tool') {
+        console.log(`Tool Response ${index}: ID=${msg.tool_call_id}`);
+      }
+    });
+    console.log('=== END STRUCTURE DEBUG ===');
 
-      // LOG TOKEN USAGE BEFORE SECOND OPENAI CALL
-      console.log(`\n=== TOKEN USAGE ANALYSIS - SECOND CALL ===`);
-      console.log(`📝 System Prompt: ${systemPrompt.length} chars (~${estimateTokens(systemPrompt)} tokens)`);
-      console.log(`🔧 Function Definitions: Same as first call (~${estimateTokens(JSON.stringify(tools))} tokens)`);
-      console.log(`💬 Original Messages: ${messages.length} messages`);
-      console.log(`🤖 Assistant Response: ${assistantMessage.content?.length || 0} chars (~${estimateTokens(assistantMessage.content || '')} tokens)`);
-      console.log(`🔧 Tool Result: ${toolResult.length} chars (~${estimateTokens(toolResult)} tokens)`);
-      console.log(`📊 Total Follow-up Messages: ${followUpMessages.length}`);
-      const totalFollowupChars = followUpMessages.reduce((acc, msg) => acc + (msg.content?.length || 0), 0);
-      console.log(`🎯 ESTIMATED TOTAL INPUT (SECOND CALL): ~${estimateTokens(systemPrompt) + estimateTokens(JSON.stringify(tools)) + estimateTokens(totalFollowupChars.toString())} tokens`);
-      console.log(`=== END TOKEN ANALYSIS ===\n`);
+    // LOG TOKEN USAGE BEFORE SECOND OPENAI CALL
+    console.log(`\n=== TOKEN USAGE ANALYSIS - SECOND CALL ===`);
+    console.log(`📝 System Prompt: ${systemPrompt.length} chars (~${estimateTokens(systemPrompt)} tokens)`);
+    console.log(`🔧 Function Definitions: Same as first call (~${estimateTokens(JSON.stringify(tools))} tokens)`);
+    console.log(`💬 Original Messages: ${messages.length} messages`);
+    console.log(`🤖 Assistant Response: ${assistantMessage.content?.length || 0} chars (~${estimateTokens(assistantMessage.content || '')} tokens)`);
+    const totalToolResultChars = toolResponses.reduce((acc, resp) => acc + resp.content.length, 0);
+    console.log(`🔧 Tool Results Total: ${totalToolResultChars} chars (~${estimateTokens(totalToolResultChars.toString())} tokens)`);
+    console.log(`📊 Total Follow-up Messages: ${followUpMessages.length}`);
+    const totalFollowupChars = followUpMessages.reduce((acc, msg) => acc + (msg.content?.length || 0), 0);
+    console.log(`🎯 ESTIMATED TOTAL INPUT (SECOND CALL): ~${estimateTokens(systemPrompt) + estimateTokens(JSON.stringify(tools)) + estimateTokens(totalFollowupChars.toString())} tokens`);
+    console.log(`=== END TOKEN ANALYSIS ===\n`);
 
+    try {
       const followUpResponse = await openai.chat.completions.create({
         model: 'gpt-4o',
         messages: followUpMessages,
@@ -968,7 +996,7 @@ function getNaturalTools(gapAnalysis: any): any[] {
       }, { headers: corsHeaders() });
       
     } catch (error) {
-      console.error(`Error handling function ${functionName}:`, error);
+      console.error('Error in function calling flow:', error);
       return NextResponse.json({ 
         message: "I encountered an issue processing that information. Let's continue our conversation."
       }, { headers: corsHeaders() });

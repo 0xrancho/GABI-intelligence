@@ -166,11 +166,15 @@ const renderMessageContent = (content: string, sessionId?: string, qualification
   );
 };
 
+// Add constants for GABI's personality
+const GABI_OPENING_MESSAGE = "Hi! I'm GABI, Joel's assistant. How can I help?";
+const INPUT_PLACEHOLDER = "Say something like 'Hi I'm Bob'";
+
 export default function ChatWidget({ isEmbedded = false, onClose }: ChatWidgetProps) {
   const [messages, setMessages] = useState<Message[]>([
     {
       role: 'assistant',
-      content: "Hi! I'm GABI, your AI qualification assistant. I help screen opportunities, assess project fit, and can book meetings directly. What kind of project or opportunity are you exploring?",
+      content: GABI_OPENING_MESSAGE,
       timestamp: new Date()
     }
   ]);
@@ -427,7 +431,7 @@ export default function ChatWidget({ isEmbedded = false, onClose }: ChatWidgetPr
             type="text"
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            placeholder="Type your message..."
+            placeholder={INPUT_PLACEHOLDER}
             disabled={isLoading}
             className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:opacity-50"
           />

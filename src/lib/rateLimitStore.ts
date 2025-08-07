@@ -13,19 +13,24 @@ class RateLimitStoreManager {
       requests: new Map(),
       tokens: new Map(),
       sessions: new Map(),
+      burstRequests: new Map(), // Track burst requests (3 req/sec)
     };
 
     this.config = {
       requests: {
         limit: 10,
-        windowMs: 60 * 60 * 1000, // 1 hour
+        windowMs: 60 * 1000, // 1 minute (10 req/min)
+        burstLimit: 3,
+        burstWindowMs: 1000, // 1 second (3 req/sec burst)
       },
       tokens: {
-        limit: 5000,
+        limit: 25000, // 25,000 tokens total input/output
         windowMs: 24 * 60 * 60 * 1000, // 24 hours
       },
       sessions: {
-        limit: 3,
+        limit: 10, // 10 sessions per IP per day
+        windowMs: 24 * 60 * 60 * 1000, // 24 hours
+        exemptIPs: ['127.0.0.1', '::1'], // Local IP exemption - add your actual IP here
       },
     };
 
@@ -34,17 +39,27 @@ class RateLimitStoreManager {
   }
 
   private startCleanupTasks(): void {
-    // Clean expired request limits every 10 minutes
+    // Clean expired request limits every minute
     const requestCleanup = setInterval(() => {
       this.cleanExpiredEntries(this.store.requests);
-    }, 10 * 60 * 1000);
+    }, 60 * 1000);
+
+    // Clean expired burst request limits every 5 seconds
+    const burstCleanup = setInterval(() => {
+      this.cleanExpiredEntries(this.store.burstRequests);
+    }, 5 * 1000);
 
     // Clean expired token limits every hour
     const tokenCleanup = setInterval(() => {
       this.cleanExpiredEntries(this.store.tokens);
     }, 60 * 60 * 1000);
 
-    this.cleanupIntervals.push(requestCleanup, tokenCleanup);
+    // Clean expired session limits every hour
+    const sessionCleanup = setInterval(() => {
+      this.cleanExpiredSessions();
+    }, 60 * 60 * 1000);
+
+    this.cleanupIntervals.push(requestCleanup, burstCleanup, tokenCleanup, sessionCleanup);
   }
 
   private cleanExpiredEntries<T extends { resetTime: number }>(map: Map<string, T>): void {
@@ -56,7 +71,23 @@ class RateLimitStoreManager {
     }
   }
 
+  private cleanExpiredSessions(): void {
+    const now = Date.now();
+    for (const [key, value] of this.store.sessions.entries()) {
+      if (value.resetTime && now >= value.resetTime) {
+        this.store.sessions.delete(key);
+      }
+    }
+  }
+
   checkRequestLimit(ip: string): { allowed: boolean; remaining: number; resetTime: number } {
+    // First check burst limit (3 req/sec)
+    const burstCheck = this.checkBurstLimit(ip);
+    if (!burstCheck.allowed) {
+      return burstCheck;
+    }
+
+    // Then check regular limit (10 req/min)
     const now = Date.now();
     const data = this.store.requests.get(ip);
 
@@ -84,6 +115,38 @@ class RateLimitStoreManager {
     return {
       allowed: true,
       remaining: this.config.requests.limit - data.count,
+      resetTime: data.resetTime,
+    };
+  }
+
+  private checkBurstLimit(ip: string): { allowed: boolean; remaining: number; resetTime: number } {
+    const now = Date.now();
+    const data = this.store.burstRequests.get(ip);
+
+    if (!data || now >= data.resetTime) {
+      // Reset or create new entry
+      const resetTime = now + this.config.requests.burstWindowMs;
+      this.store.burstRequests.set(ip, { count: 1, resetTime });
+      return {
+        allowed: true,
+        remaining: this.config.requests.burstLimit - 1,
+        resetTime,
+      };
+    }
+
+    if (data.count >= this.config.requests.burstLimit) {
+      return {
+        allowed: false,
+        remaining: 0,
+        resetTime: data.resetTime,
+      };
+    }
+
+    // Increment count
+    data.count++;
+    return {
+      allowed: true,
+      remaining: this.config.requests.burstLimit - data.count,
       resetTime: data.resetTime,
     };
   }
@@ -125,13 +188,21 @@ class RateLimitStoreManager {
   }
 
   checkSessionLimit(ip: string, sessionId: string): { allowed: boolean; remaining: number } {
+    // Check if IP is exempt from session limits
+    if (this.config.sessions.exemptIPs.includes(ip)) {
+      return { allowed: true, remaining: 999 }; // Always allow exempt IPs
+    }
+
+    const now = Date.now();
     const data = this.store.sessions.get(ip);
 
-    if (!data) {
-      // Create new entry
+    if (!data || (data.resetTime && now >= data.resetTime)) {
+      // Reset or create new entry (daily limit)
+      const resetTime = now + this.config.sessions.windowMs;
       this.store.sessions.set(ip, {
         activeCount: 1,
         sessionIds: new Set([sessionId]),
+        resetTime,
       });
       return {
         allowed: true,
@@ -147,7 +218,7 @@ class RateLimitStoreManager {
       };
     }
 
-    // Check if we can add a new session
+    // Check if we can add a new session (daily limit)
     if (data.activeCount >= this.config.sessions.limit) {
       return {
         allowed: false,

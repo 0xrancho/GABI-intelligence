@@ -2,7 +2,20 @@
 
 Living document for tracking bugs, fixes, and testing results.
 
-## Current Status: ✅ QUALIFICATION LOGIC IMPLEMENTED - READY FOR TESTING
+## Current Status: ✅ GAP ANALYSIS TIMING FIX IMPLEMENTED - READY FOR TESTING
+**GABI Gap Analysis Timing Fix - COMPLETE**
+- **Date**: 2025-08-07
+- **Enhancement**: Fixed gap analysis timing to run after information capture with current conversation context
+- **Key Changes**:
+  - Enhanced `analyzeInformationGaps()` function to accept `currentMessages` parameter
+  - Added `parseCurrentConversation()` function to extract information from live conversation
+  - Gap analysis now considers both session state AND current conversation messages
+  - Calendar tool threshold lowered from 'ready' to 'ready' OR 'interested' 
+  - Information extraction patterns for name, company, email, pain points, and catalyst signals
+- **Files Modified**: `src/lib/conversationIntelligence.ts`, `src/app/api/chat/route.ts`
+- **Impact**: Solves chicken-and-egg problem where calendar tools weren't loading because gap analysis ran before information was captured
+- **Status**: ✅ READY FOR RODRIGO CONVERSATION TEST CASE VALIDATION
+
 **GABI Qualification Agent Logic - COMPLETE**
 - **Date**: 2025-08-06
 - **Enhancement**: Implemented comprehensive qualification logic with scoring criteria integration
@@ -59,6 +72,467 @@ Living document for tracking bugs, fixes, and testing results.
 - GABI operating in "simulation mode" instead of "function calling mode"
 - Missing email validation requirement before calendar availability check
 - No timeout/retry mechanism when function calls should occur but don't
+
+### Test Case: Rodrigo from Cummings Gap Analysis Bug
+**Date**: 2025-08-07  
+**Issue Type**: Gap Analysis Timing Bug  
+**Priority**: Critical  
+
+**Scenario Setup:**
+User "Rodrigo from Cummings" conversation demonstrates gap analysis timing issue:
+- **User Input**: "Hi I'm Rodrigo from Cummings and I'm looking for help to implement more structure and process around our rev ops."
+- **Expected**: Calendar tools should be available (interested + company + name + challenge)
+- **Actual**: "Conditions not met to call Calendar functions"
+
+**Debug Log Analysis:**
+```
+Gap Analysis Result: {
+  contactGaps: [], // Should be empty (name: Rodrigo, company: Cummings captured)
+  contextGaps: ['business_challenge'], // Should recognize 'rev ops structure' as challenge
+  readinessLevel: 'exploring' // Should be 'interested' 
+}
+Calendar Tools Condition: false // Should be true
+```
+
+**Root Cause Identified:**
+Gap analysis was running on stored `sessionState` before information capture completed. The parsing logic was missing information from current conversation messages.
+
+**Solution Applied:**
+1. **Enhanced Gap Analysis**: Modified `analyzeInformationGaps()` to accept `currentMessages` parameter
+2. **Current Context Parsing**: Added `parseCurrentConversation()` function with regex patterns for:
+   - Name extraction: "I'm [name]", "My name is [name]", etc.
+   - Company extraction: "from [company]", "at [company]", "work for [company]"
+   - Pain point indicators: challenge, problem, issue, struggle, etc.
+   - Catalyst indicators: urgent, deadline, need to, must, etc.
+3. **Combined Analysis**: Gap analysis now checks BOTH session state AND current conversation
+4. **Threshold Lowering**: Calendar tools now available for 'interested' OR 'ready' readiness levels
+
+**Expected Result After Fix:**
+- Rodrigo conversation should trigger 'interested' readiness level immediately
+- Calendar tools should be available on first message
+- GABI should offer calendar booking after qualification response
+
+**Status**: ✅ FIX IMPLEMENTED - READY FOR RETEST
+
+### Test Case: Tim from Simple IT - Gap Analysis Fix Success ✅
+**Date**: 2025-08-07  
+**Issue Type**: Gap Analysis Timing Fix Validation  
+**Priority**: High  
+
+**Scenario:**
+Tim, CEO of Simple IT in Indianapolis, looking for custom GABI implementation.
+
+**What Worked Perfectly ✅:**
+1. **Gap Analysis Timing**: Information capture worked in real-time
+   - First message: `contactGaps: [ 'company', 'email' ]` (2 gaps) - Calendar tools NOT loaded ❌
+   - Second message: `contactGaps: [ 'email' ]` (1 gap) - Calendar tools loaded ✅  
+   - **Fix Confirmed**: Gap analysis now runs after information capture
+
+2. **Real-time Context Recognition**: 
+   - Name "Tim" captured immediately from "My name is TIM"
+   - Company "Simple IT" captured from "CEO of Simple IT"
+   - Challenge recognized from "complex prospecting / qualification needs"
+   - Timeline captured from "next 6 months for sure"
+
+3. **Calendar Tool Loading**: 
+   - Tools properly loaded when `contactGaps <= 1` condition met
+   - `check_calendar_availability` function actually called by OpenAI
+   - Debug logs show: "✅ LOADING CALENDAR TOOLS - check_calendar_availability & book_calendar_meeting"
+
+4. **Graceful Fallback**: When calendar function failed, GABI smoothly provided Calendly link
+
+**What Still Needs Work ⚠️:**
+- **Calendar Function Execution**: OpenAI calls `check_calendar_availability` but function returns error
+- **Root Cause**: Likely Google Calendar API integration issue, not gap analysis timing
+- **User Experience**: Calendly fallback works perfectly, so no user-facing failure
+
+**Technical Analysis:**
+```
+Conversation Flow:
+Message 1: contactGaps: 2 → Calendar tools NOT available
+Message 2: contactGaps: 1 → Calendar tools available ✅
+Message 5: Calendar function called but failed → Calendly fallback ✅
+```
+
+**Key Success Metrics:**
+- ✅ Gap analysis timing fixed - no more chicken-and-egg problem
+- ✅ Real-time information extraction working
+- ✅ Calendar tools loading when conditions met  
+- ✅ Graceful degradation to Calendly when function fails
+- ✅ Natural conversation flow maintained throughout
+
+**Status**: ✅ GAP ANALYSIS TIMING FIX VALIDATED - Calendar function failure is separate issue
+
+### Test Case: John from Morales Group - Two Critical Issues ❌
+**Date**: 2025-08-07  
+**Issue Type**: Calendar + Airtable Integration Failures  
+**Priority**: Critical  
+
+**Scenario:**
+John, CEO of Morales Group in Indy, looking for custom AI for sales team.
+
+**What Worked ✅:**
+- ✅ Gap analysis timing fix working perfectly
+- ✅ Calendar tools loaded correctly when `contactGaps: 1`  
+- ✅ OpenAI successfully called `check_calendar_availability` function
+- ✅ Natural conversation flow and qualification
+- ✅ Graceful fallback to Calendly link
+
+**Critical Issue #1: Missing Google Refresh Token 🚨**
+```
+🗓️ CALENDAR AVAILABILITY DEBUG: {
+  hasGoogleRefreshToken: false,  // ← ROOT CAUSE
+  googleCalendarId: 'joel@commitimpact.com'
+}
+```
+- **Symptom**: Calendar function called but fails due to authentication
+- **Root Cause**: `GOOGLE_REFRESH_TOKEN` environment variable missing
+- **Impact**: Calendar integration completely non-functional
+- **Status**: ❌ REQUIRES GOOGLE OAUTH2 SETUP
+
+**Critical Issue #2: Airtable Field Name Mismatch 🚨**
+```
+AirtableError {
+  error: 'UNKNOWN_FIELD_NAME',
+  message: 'Unknown field name: "Business Challenge"'
+}
+```
+- **Symptom**: CRM save failing with unknown field error
+- **Root Cause**: Field name mismatch between code and Airtable schema
+- **Impact**: Contact information not being saved to CRM
+- **Status**: ❌ REQUIRES AIRTABLE SCHEMA FIX
+
+**Flow Analysis:**
+```
+Message 1: contactGaps: 2 → No calendar tools ❌
+Message 2: contactGaps: 1 → Calendar tools loaded ✅  
+Message 3: Calendar function called → Auth failed ❌
+           CRM save called → Field name failed ❌
+```
+
+**Next Steps:**
+1. Fix Google Calendar authentication (refresh token)
+2. Fix Airtable field name mapping
+3. Retest with both integrations working
+
+**Status**: ❌ TWO CRITICAL INTEGRATIONS BROKEN
+
+### Test Case: Kyle from Roche - Major Progress with Issues ⚠️
+**Date**: 2025-08-07  
+**Issue Type**: Calendar Function Working, UX Issues  
+**Priority**: Medium  
+
+**Scenario:**
+Kyle, Senior IT Manager at Roche, looking for conversational BI solution for M&A due diligence. High-value prospect (27 engineers, $30M acquisitions/year, 9 M&A staff, urgent timeline).
+
+**Major Breakthroughs ✅:**
+- ✅ **Google Calendar Authentication**: `hasGoogleRefreshToken: true` 
+- ✅ **Calendar Function Success**: OpenAI called `check_calendar_availability` and it worked
+- ✅ **Airtable Integration**: No field name errors, successful CRM saves
+- ✅ **Gap Analysis Flow**: Contact gaps reduced from 3 → 2 → 1, triggering calendar tools
+- ✅ **Function Calling**: All 3 functions called properly (capture, assess_fit, calendar)
+- ✅ **Calendar Data**: Returned actual time slots (7:00 AM - 9:00 AM Friday)
+
+**Issues Identified ⚠️:**
+
+**Issue 1: Calendar Loading Threshold Too High**
+```
+Message 2: contactGaps: 2 → Calendar tools NOT loaded ❌
+Message 4: contactGaps: 1 → Calendar tools loaded ✅
+```
+- **Problem**: Kyle provided name + company in message 2, but still had 2 gaps (missing email)
+- **Impact**: User had to wait 4 messages before calendar tools became available
+- **Expected**: Should load calendar tools when name + company provided (most qualification signals present)
+
+**Issue 2: Silent Calendar Processing**
+- **Problem**: 2-minute delay after "I'll check Joel's availability. Hang tight!"
+- **Impact**: User had to prompt with "hello?" to get response
+- **Root Cause**: Calendar API call took time but no progress indication
+
+**Issue 3: Gap Analysis Logic**
+```
+Contact gaps: 3 → 2 → 2 → 1
+```
+- **Problem**: Gap count not reducing efficiently despite information capture
+- **Expected**: Should recognize Kyle + Roche + detailed context = ready for scheduling
+
+**Technical Analysis:**
+- ✅ OAuth2 authentication successful
+- ✅ Google Calendar API returning real availability 
+- ✅ All integrations working technically
+- ⚠️ User experience needs improvement
+
+**Recommendations:**
+1. Lower calendar tool threshold to load when `contactGaps <= 2` (name + company sufficient)
+2. Add progress indicator during calendar API calls
+3. Improve gap analysis to better recognize qualification signals
+
+**Status**: ✅ CORE INTEGRATIONS WORKING - UX IMPROVEMENTS NEEDED
+
+### Test Case: Toby from E-gineering - Calendar Not Working + Airtable Field Error 🔴
+**Date**: 2025-08-07  
+**Issue Type**: Calendar Function Not Called + Airtable Schema Mismatch  
+**Priority**: High  
+
+**Scenario:**
+Toby, CEO of E-gineering in Indianapolis, existing relationship with Joel (had lunch last month), wants to schedule another meeting.
+
+**Critical Issues 🔴:**
+
+**Issue 1: Calendar Function Never Called Despite Collecting Email**
+```
+Message 1: "What times generally work best for you?" ✅ (Asked for availability)
+Message 2: "could you provide the best email address" ✅ (Asked for email)
+Message 3: Got email → Did NOT call check_calendar_availability ❌
+         → Gave Calendly fallback instead
+```
+- **Problem**: Despite having name, company, email, and time preferences, GABI never called the calendar function
+- **Impact**: User gets generic Calendly link instead of actual availability
+- **Terminal**: Shows `🔧 Function calls: check_calendar_availability` but then gives Calendly fallback
+
+**Issue 2: Airtable Field Error Returns**
+```
+AirtableError {
+  error: 'UNKNOWN_FIELD_NAME',
+  message: 'Unknown field name: "Source"'
+}
+```
+- **Problem**: 'Source' field doesn't exist in Airtable schema
+- **Impact**: Contact information not being saved to CRM
+- **Note**: This is a regression - we fixed field names but missed 'Source'
+
+**Issue 3: Calendar Function Result Not Presented**
+- **Problem**: Even when calendar function is called (Message 3), GABI presents Calendly fallback
+- **Expected**: Should present actual calendar slots from Joel's calendar
+- **Actual**: "For more flexibility, you can book directly through Joel's calendar"
+
+**What Worked ✅:**
+- ✅ GABI properly asked for availability preferences
+- ✅ GABI properly asked for email before booking
+- ✅ Calendar tools loaded correctly (contactGaps: 2 → ✅)
+- ✅ OAuth authentication working (`hasGoogleRefreshToken: true`)
+
+**Technical Analysis:**
+```
+Terminal shows calendar function called with:
+- duration: 60
+- preferred_times: ['next Wednesday lunchtime', 'next Thursday lunchtime']
+- Calendar API responded (no error shown)
+- But GABI gave Calendly fallback anyway
+```
+
+**Root Causes:**
+1. Calendar function return value not being properly handled by OpenAI
+2. 'Source' field needs to be removed from Airtable mapping
+3. Possible issue with how lunch meetings (60 min) are handled
+
+**Status**: ❌ CALENDAR INTEGRATION BROKEN DESPITE AUTH WORKING
+
+### Test Case: Amy from Covideo - Calendar Still Fallback + Over-qualification 🔴
+**Date**: 2025-08-07  
+**Issue Type**: Calendar Results Not Presented + Unnecessary Qualification  
+**Priority**: Critical  
+
+**Scenario:**
+Amy, CEO at Covideo, wants GABI implementation for landing page to book meetings for 5 AEs. Direct pricing question.
+
+**Critical Issues 🔴:**
+
+**Issue 1: Calendar Function Called But Results Not Presented**
+```
+Message 6: Calendar function called successfully
+- duration: 60
+- preferred_times: ['next Tuesday afternoon 1-4p', 'next Thursday afternoon 1-4p']
+- hasGoogleRefreshToken: true ✅
+Response: Calendly fallback link instead of actual slots
+```
+- **Problem**: Calendar API works but GABI gives Calendly link anyway
+- **Impact**: Users don't see actual availability despite successful API call
+- **Pattern**: This is consistent across all test cases - function works, results ignored
+
+**Issue 2: Over-Qualification Despite Clear Intent**
+```
+Message 1: "CEO at Covideo...looking at getting you on a landing page...How much do you cost?"
+Response: Asked for "urgency" and "budget signals" instead of answering pricing
+```
+- **Problem**: Amy provided ALL qualification info upfront (name, company, role, clear project, pricing question)
+- **Impact**: Frustrating user experience asking redundant questions
+- **Expected**: Should recognize high intent and move to scheduling immediately
+
+**Issue 3: GABI Doesn't Know Pricing**
+- **User Question**: "How much do you cost?"
+- **GABI Response**: "It can vary based on scope"
+- **Problem**: No concrete pricing information available
+- **Solution Needed**: Add pricing context to system prompt
+
+**Issue 4: Unnecessary Budget Elicitation**
+- **Problem**: Asking for "budget signals" is awkward and unnecessary
+- **Impact**: Makes conversation feel like interrogation
+- **Recommendation**: Remove budget as elicitation object
+
+**What Worked ✅:**
+- ✅ Calendar tools loaded properly (contactGaps: 1 then 0)
+- ✅ GABI asked for email and availability preferences
+- ✅ Calendar function called with correct parameters
+- ✅ OAuth working perfectly
+
+**Root Causes:**
+1. **Calendar Results Bug**: Function returns slots but GABI ignores them
+2. **Over-Aggressive Qualification**: System prompt pushes too hard for all elicitation objects
+3. **Missing Pricing Info**: GABI has no pricing knowledge to share
+4. **Budget Questions**: Awkward and unnecessary for qualification
+
+**Recommendations:**
+1. Debug why calendar function results aren't being presented by OpenAI
+2. Remove budget as elicitation object from system prompt
+3. Add pricing info: "$200-500/month, 1 week implementation"
+4. Reduce qualification aggression when clear intent shown
+
+**Status**: ❌ CALENDAR FUNCTION RESULTS NOT BEING USED BY OPENAI
+
+### Test Case: Andrew - Calendar Called But Fallback Given Again 🔴
+**Date**: 2025-08-07  
+**Issue Type**: Persistent Calendar Results Issue  
+**Priority**: Critical  
+
+**Scenario:**
+Andrew conversation showing same pattern - calendar function called successfully but results not presented.
+
+**Critical Pattern Confirmed 🔴:**
+```
+Terminal Output:
+🔧 Function calls: check_calendar_availability ✅
+🗓️ CALENDAR AVAILABILITY DEBUG: {
+  duration: 60,
+  preferred_times: ['next week'],
+  hasGoogleRefreshToken: true ✅
+}
+```
+
+**Issue Persists:**
+- Calendar function IS being called
+- OAuth authentication IS working  
+- But GABI still gives Calendly fallback instead of actual slots
+- This is now confirmed across 4+ test cases
+
+**Pricing Issue Fixed ✅:**
+- Previous: "$500/month" (missing lower range)
+- Now: Should show "$200-500/month"
+- Need to verify in next conversation
+
+**Technical Analysis:**
+```
+1. Gap Analysis: ✅ Working (contactGaps: 2 → 1, calendar tools loaded)
+2. Function Calling: ✅ Working (check_calendar_availability called)
+3. OAuth: ✅ Working (hasGoogleRefreshToken: true)
+4. Calendar API: ❓ Unknown (need to see debug logs for slots returned)
+5. OpenAI Response: ❌ Not using function results
+```
+
+**Hypothesis:**
+Either:
+1. Calendar API returning empty slots (business hours mismatch?)
+2. OpenAI ignoring function response format
+3. Function error being silently caught
+
+**Next Debug Steps:**
+1. Check terminal for "📅 Calendar slots found:" message
+2. Verify business hours configuration (7am-2pm currently)
+3. Test with manual calendar API call
+
+**Status**: ❌ CORE CALENDAR INTEGRATION BROKEN - FUNCTION RESULTS IGNORED
+
+### Test Case: Linda from SoHo Group - CALENDAR WORKING! But Wrong Dates & Booking Issues 🟡
+**Date**: 2025-08-07  
+**Issue Type**: Calendar Slots Presented Wrong Dates, Booking Called But Not Working  
+**Priority**: High  
+
+**Scenario:**
+Linda from SoHo Group, ready to implement GABI on website, scheduling for Wednesday afternoon.
+
+**MAJOR BREAKTHROUGH - Calendar Working ✅:**
+```
+Terminal Output:
+📅 Calendar slots found: 50 total, returning first 5
+📅 Time options being returned:
+Friday, Aug 8, 9:00 AM
+Friday, Aug 8, 9:30 AM
+Friday, Aug 8, 10:30 AM
+Friday, Aug 8, 11:00 AM
+Friday, Aug 8, 11:30 AM
+📅 FUNCTION RETURNING: Great! Joel has these 30-minute slots available...
+```
+- **✅ CALENDAR API WORKING** - Found 50 slots!
+- **✅ SLOTS BEING RETURNED** - Function returning proper response
+- **✅ BUSINESS HOURS FIX WORKED** - Now showing 9am-5pm slots
+
+**Critical Issues Identified ❌:**
+
+**Issue 1: Wrong Dates Returned**
+```
+User asked: "Wednesday afternoon"
+Calendar returned: Friday morning slots only
+GABI improvised: "Wednesday, Aug 9, 1:00 PM" (made up times)
+```
+- **Problem**: Calendar returning wrong day/time slots
+- **Impact**: GABI had to fabricate Wednesday times
+- **Root Cause**: Calendar not filtering by user preferences
+
+**Issue 2: Email Collection After Booking**
+```
+Flow: Select time → Fake confirm → "you never asked for my email" → Ask email
+```
+- **Problem**: `book_calendar_meeting` called WITHOUT email
+- **Terminal shows**: Two `book_calendar_meeting` calls
+- **First call**: Missing email, likely failed
+- **Second call**: After getting email
+
+**Issue 3: Multiple Booking Attempts**
+```
+🔧 Function calls: book_calendar_meeting (called twice)
+- First at 2:29 AM without email
+- Second at 3:31 AM with email
+```
+
+**Technical Analysis:**
+1. **Calendar Function**: ✅ Working (50 slots found)
+2. **Date Filtering**: ❌ Not respecting preferred_times
+3. **Booking Function**: ⚠️ Called but failing silently
+4. **Email Collection**: ❌ Out of order
+5. **Airtable**: ✅ Working (multiple successful saves)
+
+**Key Discovery:**
+- Calendar returns slots but ignores `preferred_times: ['Wednesday afternoon']`
+- Returns Friday morning instead of Wednesday afternoon
+- GABI compensates by making up times
+
+**Next Fixes Needed:**
+1. Fix calendar to filter by user's preferred times
+2. Ensure email collected BEFORE booking attempt
+3. Add error handling for failed booking attempts
+4. Verify actual calendar event creation
+
+**Status**: 🟡 CALENDAR WORKING - User preference handling enhanced, booking needs testing
+
+**Latest Fix Applied 2025-08-08:**
+Enhanced calendar function to properly acknowledge user preferences and provide clear feedback when available times don't match requested preferences:
+
+- Added `checkPreferenceMatch()` helper function to compare available slots against user preferences
+- Modified calendar response to acknowledge what user requested (e.g., "You mentioned Wednesday afternoon")
+- Added explicit messaging when no exact matches found: "I don't see exact matches for your preferred times, but these are the available options"
+- Prevents GABI from fabricating times by providing transparency about availability mismatches
+
+This should resolve Linda's test case where "Wednesday afternoon" request returned "Friday morning" slots but GABI made up Wednesday times.
+
+**Calendar Booking Debug Enhancement 2025-08-08:**
+Added comprehensive debugging to `handleCalendarBooking()` function to identify why calendar invites aren't being sent:
+
+- Added detailed logging of booking attempts with session state and authentication status
+- Enhanced email validation to check both session state and function arguments
+- Added success logging to track when Google Calendar events are actually created
+- Improved error visibility for booking failures
+
+Next step: Test a complete booking flow to see the debug output and identify any gaps.
 
 ### Test Case: Mike from SEP Conversation
 **Date**: 2025-08-06  
@@ -175,6 +649,17 @@ GABI provided generic consulting advice:
 - **Status**: Fixed - comprehensive multiple tool call handling implemented
 
 ## Recent Fixes
+### 2025-08-06: Calendar Function Call Debugging Enhanced ✅
+**Problem**: No visibility into why calendar functions aren't being called when scheduling is requested
+**Solution**: 
+- **Tool Loading Debug**: Added comprehensive logging to `getNaturalTools()` showing which tools are loaded and why
+- **Gap Analysis Logging**: Enhanced conversation analysis to show calendar tool eligibility conditions in real-time
+- **Function Call Detection**: Added logging to detect when OpenAI should call calendar functions but doesn't
+- **Missing Function Detection**: Automatically detects calendar keywords in responses without function calls
+- **Condition Tracking**: Clear visibility into readiness level and contact gaps that control calendar tool availability
+**Files**: `src/app/api/chat/route.ts`
+**Impact**: Terminal logs now provide complete visibility into calendar function calling logic for debugging
+
 ### 2025-08-06: Rate Limiter Configuration Updated ✅
 **Problem**: Restrictive rate limiting preventing proper testing and production use
 **Solution**:

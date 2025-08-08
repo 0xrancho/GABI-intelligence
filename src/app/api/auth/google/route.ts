@@ -7,11 +7,21 @@ export async function GET(request: NextRequest) {
     const action = searchParams.get('action') || 'authorize';
     
     if (action === 'authorize') {
+      // DEBUG: Log environment variables
+      console.log('🔧 OAuth Debug Info:');
+      console.log('CLIENT_ID:', process.env.GOOGLE_CLIENT_ID);
+      console.log('CLIENT_SECRET:', process.env.GOOGLE_CLIENT_SECRET ? '[SET]' : '[MISSING]');
+      console.log('REDIRECT_URI env var:', process.env.GOOGLE_REDIRECT_URI);
+      console.log('NEXT_PUBLIC_APP_URL:', process.env.NEXT_PUBLIC_APP_URL);
+      
+      const redirectUri = process.env.GOOGLE_REDIRECT_URI || `${process.env.NEXT_PUBLIC_APP_URL}/api/auth/google?action=callback`;
+      console.log('Final redirect URI being used:', redirectUri);
+      
       // Generate OAuth authorization URL
       const oauth2Client = new google.auth.OAuth2(
         process.env.GOOGLE_CLIENT_ID,
         process.env.GOOGLE_CLIENT_SECRET,
-        process.env.GOOGLE_REDIRECT_URI || `${process.env.NEXT_PUBLIC_APP_URL}/api/auth/google?action=callback`
+        redirectUri
       );
       
       const scopes = [
@@ -25,6 +35,9 @@ export async function GET(request: NextRequest) {
         prompt: 'consent', // Force consent to get refresh token
         state: 'calendar_setup' // Add state for security
       });
+      
+      console.log('Generated auth URL:', authUrl);
+      console.log('🔧 OAuth Setup Complete - check logs above for debug info');
       
       return NextResponse.json({
         auth_url: authUrl,

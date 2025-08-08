@@ -155,7 +155,9 @@ export class GoogleCalendarService {
       }
       
       // Generate slots for business hours
-      for (let hour = 7; hour < 14; hour++) {
+      const startHour = parseInt(businessHours.start.toString().slice(0, -2));
+      const endHour = parseInt(businessHours.end.toString().slice(0, -2));
+      for (let hour = startHour; hour < endHour; hour++) {
         for (let minute = 0; minute < 60; minute += 30) {
           const slotStart = new Date(currentDate);
           slotStart.setHours(hour, minute, 0, 0);
@@ -164,7 +166,7 @@ export class GoogleCalendarService {
           slotEnd.setMinutes(slotEnd.getMinutes() + duration);
           
           // Skip if slot would extend past business hours
-          if (slotEnd.getHours() >= 14) {
+          if (slotEnd.getHours() >= endHour || (slotEnd.getHours() === endHour && slotEnd.getMinutes() > 0)) {
             continue;
           }
           

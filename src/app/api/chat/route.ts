@@ -164,44 +164,26 @@ async function handleStrategicCRMSave(args: any, sessionId?: string): Promise<st
       'Company': session.contactInfo?.company || '',
       'Role': session.contactInfo?.role || '',
       
-      // Business Context (capture partial information too)
-      'Business Challenge': session.discoveryContext?.painPoint || 'Not specified',
-      'Urgency Catalyst': session.discoveryContext?.catalyst || '',
-      'Success Vision': session.discoveryContext?.successVision || '',
-      'Project Scope': session.discoveryContext?.projectScope || '',
+      // Business Context (map to available Airtable fields)
+      'Pain Point': session.discoveryContext?.painPoint || 'Not specified',
+      'Project Context': `${session.discoveryContext?.catalyst ? 'Urgency: ' + session.discoveryContext.catalyst + '. ' : ''}${session.discoveryContext?.successVision ? 'Vision: ' + session.discoveryContext.successVision + '. ' : ''}${session.discoveryContext?.projectScope ? 'Scope: ' + session.discoveryContext.projectScope : ''}`.trim() || '',
       
-      // Qualification Results (even if incomplete)
-      'Qualification Status': session.qualificationStatus?.qualified === true ? 'Qualified' : 
-                             session.qualificationStatus?.qualified === false ? 'Not Qualified' : 'Not Assessed',
-      'Qualification Score': session.qualificationStatus?.confidenceScore || 0,
-      'Qualification Reasoning': session.qualificationStatus?.reasoning || 'Assessment incomplete',
-      
-      // Session Metadata (universal)
-      'Source': 'GABI Qualify',
-      'Session Outcome': args.session_outcome,
-      'Conversation Summary': args.conversation_summary,
-      'Prospect Quality': args.prospect_quality,
-      'Recommended Action': args.recommended_action,
-      'Interaction Value': args.interaction_value,
+      // Qualification Results (map to available fields)
+      'Qualified': session.qualificationStatus?.qualified === true ? 'Yes' : 
+                  session.qualificationStatus?.qualified === false ? 'No' : 'Pending',
+      'Lead Score': String(session.qualificationStatus?.confidenceScore || 0),
       
       // Meeting Information (if applicable)
       'Meeting Scheduled': session.schedulingContext?.eventId ? 'Yes' : 'No',
       'Meeting Date': session.schedulingContext?.eventId ? 
         new Date().toISOString() : '', // Would need actual meeting date from calendar
-      'Meeting Link': session.schedulingContext?.meetLink || '',
       
-      // Analytics Data (universal)
+      // Analytics Data (using available fields)
       'First Contact': (session.createdAt || new Date()).toISOString(),
       'Last Updated': new Date().toISOString(),
-      'Conversation Length': session.conversationState?.turnCount || 0,
-      'User Timezone': 'Not detected', // Could be enhanced
-      'Device Type': 'Web', // Could be enhanced
       
-      // Lead Scoring (universal)
-      'Lead Temperature': args.prospect_quality.includes('qualified') ? 'Hot' : 
-                         args.prospect_quality === 'exploring' ? 'Warm' : 'Cold',
-      'Follow Up Priority': args.session_outcome === 'meeting_booked' ? 'High' :
-                           args.session_outcome === 'meeting_recommended' ? 'Medium' : 'Low'
+      // Lead Scoring (using available fields)
+      'Lead Source': 'GABI Chat Widget'
     };
     
     // Save to Airtable (every session gets saved)
@@ -344,6 +326,33 @@ async function handleNaturalFitAssessment(args: any, sessionId?: string): Promis
   return response;
 }
 
+// Helper to check if available slots match user preferences
+function checkPreferenceMatch(availableSlots: any[], preferredTimes: string[]): boolean {
+  if (!preferredTimes || preferredTimes.length === 0) return true;
+  
+  const preferences = preferredTimes.join(' ').toLowerCase();
+  
+  for (const slot of availableSlots) {
+    const slotDate = new Date(slot.start);
+    const dayName = slotDate.toLocaleDateString('en-US', { weekday: 'long' }).toLowerCase();
+    const hour = slotDate.getHours();
+    
+    // Check day matches
+    if (preferences.includes(dayName)) {
+      // Check time of day matches
+      if (preferences.includes('morning') && hour >= 9 && hour < 12) return true;
+      if (preferences.includes('afternoon') && hour >= 12 && hour < 17) return true;
+      if (preferences.includes('lunch') && hour >= 11 && hour < 14) return true;
+      if (!preferences.includes('morning') && !preferences.includes('afternoon') && !preferences.includes('lunch')) {
+        // Day match without specific time = match
+        return true;
+      }
+    }
+  }
+  
+  return false;
+}
+
 // Calendar availability and booking functions
 function hasCompleteContactInfo(sessionState?: SessionState | null): boolean {
   if (!sessionState?.contactInfo) return false;
@@ -383,6 +392,13 @@ function calculateQualificationScore(sessionState?: SessionState | null): number
 }
 
 async function handleCalendarAvailability(args: any, sessionId?: string): Promise<string> {
+  console.log('🗓️ CALENDAR AVAILABILITY DEBUG:', {
+    args,
+    sessionId,
+    hasGoogleRefreshToken: !!process.env.GOOGLE_REFRESH_TOKEN,
+    googleCalendarId: process.env.GOOGLE_CALENDAR_ID
+  });
+  
   if (!sessionId) return 'Let me check availability for you.';
 
   try {
@@ -393,7 +409,15 @@ async function handleCalendarAvailability(args: any, sessionId?: string): Promis
     const session = sessionManager.getSession(sessionId);
     const qualificationScore = calculateQualificationScore(session);
     
-    const duration = args.duration || (qualificationScore >= 7 ? 60 : 30);
+    // Check for existing relationship indicators
+    const messageText = JSON.stringify(args).toLowerCase();
+    const isExistingRelationship = messageText.includes('lunch') || 
+                                   messageText.includes('met with') || 
+                                   messageText.includes('had meeting') ||
+                                   messageText.includes('follow up');
+    
+    // Allow 60 min for existing relationships or high qualification scores
+    const duration = args.duration || ((qualificationScore >= 7 || isExistingRelationship) ? 60 : 30);
     
     // User context for fallback
     const userContext = {
@@ -402,7 +426,7 @@ async function handleCalendarAvailability(args: any, sessionId?: string): Promis
       qualified: qualificationScore >= 7
     };
     
-    // Check 2 weeks ahead
+    // Check 2 weeks ahead (calendar will return all available slots)
     const startDate = new Date();
     const endDate = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000);
     
@@ -413,8 +437,11 @@ async function handleCalendarAvailability(args: any, sessionId?: string): Promis
       qualificationScore
     );
     
-    if (!availability.qualification_status.qualified_for_60min && duration === 60) {
-      // Offer 30-minute slots with Calendly fallback if no availability
+    // Note user's preferences for the response
+    const userPreferences = args.preferred_times ? `User requested: ${args.preferred_times.join(', ')}. ` : '';
+    
+    if (!availability.qualification_status.qualified_for_60min && duration === 60 && !isExistingRelationship) {
+      // Offer 30-minute slots with Calendly fallback if no availability (unless existing relationship)
       const fallback = calendlyFallback.getContextualMessage('good_fit', userContext);
       return `Based on our conversation so far, I can offer a 30-minute initial consultation. ${availability.qualification_status.reason}\n\nFor the most flexibility, you can book directly: ${fallback}`;
     }
@@ -436,10 +463,38 @@ async function handleCalendarAvailability(args: any, sessionId?: string): Promis
       })
     ).join('\n');
     
-    return `Great! Joel has ${duration}-minute slots available. Here are some options:\n\n${timeOptions}\n\nWhich time works best for you?\n\n(Or book directly: ${process.env.CALENDLY_LINK})`;
+    console.log(`📅 Calendar slots found: ${availability.available_slots.length} total, returning first 5`);
+    console.log(`📅 Time options being returned:\n${timeOptions}`);
+    
+    // Build response with user preference acknowledgment
+    let response = `Joel has these ${duration}-minute slots available:\n\n${timeOptions}\n\n`;
+    
+    // Add preference acknowledgment if user specified preferences
+    if (args.preferred_times && args.preferred_times.length > 0) {
+      const preferenceText = args.preferred_times.join(', ');
+      response = `You mentioned ${preferenceText}. Here's what Joel has available:\n\n${timeOptions}\n\n`;
+      
+      // Check if any slots match common preference patterns
+      const hasMatchingSlots = checkPreferenceMatch(availability.available_slots, args.preferred_times);
+      if (!hasMatchingSlots) {
+        response += "I don't see exact matches for your preferred times, but these are the available options. ";
+      }
+    }
+    
+    response += "Which of these times works best for you?";
+    
+    console.log(`📅 FUNCTION RETURNING: ${response}`);
+    return response;
     
   } catch (error) {
-    console.error('Calendar availability error:', error);
+    console.error('🚨 CALENDAR AVAILABILITY ERROR - FULL DETAILS:', {
+      errorMessage: error.message,
+      errorStack: error.stack,
+      errorObject: error,
+      hasGoogleRefreshToken: !!process.env.GOOGLE_REFRESH_TOKEN,
+      args,
+      sessionId
+    });
     
     // Use Calendly fallback on error
     const { handleCalendarError } = await import('@/lib/calendlyFallback');
@@ -457,6 +512,13 @@ async function handleCalendarAvailability(args: any, sessionId?: string): Promis
 }
 
 async function handleCalendarBooking(args: any, sessionId?: string): Promise<string> {
+  console.log('📅 BOOKING ATTEMPT:', {
+    args,
+    sessionId,
+    hasGoogleRefreshToken: !!process.env.GOOGLE_REFRESH_TOKEN,
+    googleCalendarId: process.env.GOOGLE_CALENDAR_ID
+  });
+  
   if (!sessionId) return 'I need a bit more information to book the meeting.';
 
   try {
@@ -464,10 +526,20 @@ async function handleCalendarBooking(args: any, sessionId?: string): Promise<str
     const { calendarService } = await import('@/lib/googleCalendar');
     
     const session = sessionManager.getSession(sessionId);
+    console.log('📅 Session data:', {
+      hasSession: !!session,
+      contactInfo: session?.contactInfo,
+      hasCompleteInfo: hasCompleteContactInfo(session)
+    });
     
     // Verify we have complete contact info
     if (!hasCompleteContactInfo(session)) {
       return 'I need your full name, email, and company to book the meeting. Can you share those details?';
+    }
+    
+    // Also verify the function arguments have required email
+    if (!args.attendee_email || !args.attendee_email.includes('@')) {
+      return 'I need your email address to send the calendar invitation. What\'s the best email to use?';
     }
     
     const qualificationScore = calculateQualificationScore(session);
@@ -501,6 +573,12 @@ async function handleCalendarBooking(args: any, sessionId?: string): Promise<str
     };
     
     const result = await calendarService.createEvent(eventDetails);
+    console.log('📅 BOOKING SUCCESS:', {
+      eventId: result.eventId,
+      status: result.status,
+      hasCalendarLink: !!result.calendarLink,
+      hasMeetLink: !!result.meetLink
+    });
     
     // Update session with booking info
     if (session) {
@@ -589,8 +667,8 @@ async function handleAgenticConversation(
   // Import natural conversation intelligence
   const { analyzeInformationGaps, loadNaturalRAGData, buildNaturalSystemPrompt, estimateNaturalTokenUsage } = await import('@/lib/conversationIntelligence');
   
-  // Analyze information gaps instead of rigid patterns
-  const gapAnalysis = analyzeInformationGaps(context.sessionState);
+  // Analyze information gaps instead of rigid patterns (include current conversation)
+  const gapAnalysis = analyzeInformationGaps(context.sessionState, messages);
   
   // Load only relevant RAG data
   const ragData = await loadNaturalRAGData(gapAnalysis, context.sessionState);
@@ -604,16 +682,7 @@ async function handleAgenticConversation(
   // Token usage analysis
   const tokenAnalysis = estimateNaturalTokenUsage(systemPrompt, ragData, tools.length);
   
-  console.log(`🎯 NATURAL CONVERSATION ANALYSIS:
-    Readiness Level: ${gapAnalysis.readinessLevel}
-    Contact Gaps: ${gapAnalysis.contactGaps.join(', ') || 'none'}
-    Context Gaps: ${gapAnalysis.contextGaps.join(', ') || 'none'}
-    Project Gaps: ${gapAnalysis.projectGaps.join(', ') || 'none'}
-    Available Tools: ${tools.length} functions
-    Base Prompt: ${tokenAnalysis.baseTokens} tokens
-    RAG Data: ${tokenAnalysis.ragTokens} tokens  
-    TOTAL ESTIMATED: ${tokenAnalysis.totalEstimate} tokens
-    Natural Flow: Enabled for any conversation pattern`);
+  console.log(`🤖 OpenAI Call: ${tools.length} tools, ~${tokenAnalysis.totalEstimate} tokens`);
 
   const contextualMessages = [
     { role: 'system' as const, content: systemPrompt },
@@ -622,6 +691,10 @@ async function handleAgenticConversation(
 
 // NATURAL ALWAYS-AVAILABLE TOOLS
 function getNaturalTools(gapAnalysis: any): any[] {
+  const calendarToolsCondition = (gapAnalysis.readinessLevel === 'ready' || gapAnalysis.readinessLevel === 'interested') && gapAnalysis.contactGaps.length <= 2;
+  
+  console.log(`📊 Gap Analysis: ${gapAnalysis.readinessLevel} | Contact gaps: ${gapAnalysis.contactGaps.length} | Calendar tools: ${calendarToolsCondition ? '✅' : '❌'}`);
+  
   const tools = [];
 
   // ALWAYS AVAILABLE - Natural information capture
@@ -712,12 +785,12 @@ function getNaturalTools(gapAnalysis: any): any[] {
   }
 
   // AVAILABLE WHEN QUALIFIED - Real Calendar Integration
-  if (gapAnalysis.readinessLevel === 'ready' && gapAnalysis.contactGaps.length <= 1) {
+  if (calendarToolsCondition) {
     tools.push({
       type: 'function',
       function: {
         name: 'check_calendar_availability',
-        description: 'Check Joel\'s actual calendar availability for qualified prospects',
+        description: 'Check Joel\'s actual calendar availability ONLY AFTER you have their email and availability preferences. Always ask "What times work best for you?" before calling this.',
         parameters: {
           type: 'object',
           properties: {
@@ -740,7 +813,7 @@ function getNaturalTools(gapAnalysis: any): any[] {
       type: 'function',
       function: {
         name: 'book_calendar_meeting',
-        description: 'Book an actual meeting on Joel\'s calendar after availability is confirmed',
+        description: 'Book an actual meeting on Joel\'s calendar ONLY after you have their email address and they\'ve selected a specific time slot. Always collect email first by asking "What\'s the best email to send the calendar invite to?"',
         parameters: {
           type: 'object',
           properties: {
@@ -755,7 +828,10 @@ function getNaturalTools(gapAnalysis: any): any[] {
         }
       }
     });
+  } else {
+    console.log('❌ CALENDAR TOOLS NOT LOADED - Conditions not met');
   }
+
 
   return tools;
 }
@@ -770,14 +846,28 @@ function getNaturalTools(gapAnalysis: any): any[] {
 
   // LOG OPENAI USAGE RESPONSE
   if (response.usage) {
-    console.log(`\n🤖 OPENAI USAGE (FIRST CALL):`);
-    console.log(`   Prompt tokens: ${response.usage.prompt_tokens}`);
-    console.log(`   Completion tokens: ${response.usage.completion_tokens}`);
-    console.log(`   Total tokens: ${response.usage.total_tokens}`);
-    console.log(`   Model: ${response.model}\n`);
+    console.log(`💰 Usage: ${response.usage.total_tokens} tokens`);
   }
 
   const assistantMessage = response.choices[0]?.message;
+  
+  // FUNCTION CALL DETECTION LOGGING
+  if (assistantMessage?.tool_calls) {
+    console.log(`🔧 Function calls: ${assistantMessage.tool_calls.map(call => call.function.name).join(', ')}`);
+  } else {
+    console.log(`🔧 No function calls`);
+    
+    // Check if calendar-related keywords in response suggest missing function call
+    const responseText = assistantMessage?.content?.toLowerCase() || '';
+    const calendarKeywords = ['check availability', 'schedule', 'calendar', 'meeting', 'book', 'appointment'];
+    const hasCalendarKeywords = calendarKeywords.some(keyword => responseText.includes(keyword));
+    
+    if (hasCalendarKeywords) {
+      console.log(`⚠️  POSSIBLE MISSING FUNCTION CALL - Response contains calendar keywords but no function calls:`);
+      console.log(`   Calendar Keywords Found: ${calendarKeywords.filter(k => responseText.includes(k)).join(', ')}`);
+      console.log(`   Response Preview: "${responseText.substring(0, 150)}..."`);
+    }
+  }
   
   // STRATEGIC ENDPOINT DETECTION - Check if this is a conversation endpoint
   let shouldTriggerCRMSave = false;
@@ -877,28 +967,8 @@ function getNaturalTools(gapAnalysis: any): any[] {
       ...toolResponses // Add ALL tool responses
     ];
 
-    console.log('=== FINAL MESSAGE STRUCTURE ===');
-    console.log('Follow-up Messages Length:', followUpMessages.length);
-    console.log('Tool Responses Added:', toolResponses.length);
-    followUpMessages.forEach((msg, index) => {
-      if (msg.role === 'tool') {
-        console.log(`Tool Response ${index}: ID=${msg.tool_call_id}`);
-      }
-    });
-    console.log('=== END STRUCTURE DEBUG ===');
 
     // LOG TOKEN USAGE BEFORE SECOND OPENAI CALL
-    console.log(`\n=== TOKEN USAGE ANALYSIS - SECOND CALL ===`);
-    console.log(`📝 System Prompt: ${systemPrompt.length} chars (~${estimateTokens(systemPrompt)} tokens)`);
-    console.log(`🔧 Function Definitions: Same as first call (~${estimateTokens(JSON.stringify(tools))} tokens)`);
-    console.log(`💬 Original Messages: ${messages.length} messages`);
-    console.log(`🤖 Assistant Response: ${assistantMessage.content?.length || 0} chars (~${estimateTokens(assistantMessage.content || '')} tokens)`);
-    const totalToolResultChars = toolResponses.reduce((acc, resp) => acc + resp.content.length, 0);
-    console.log(`🔧 Tool Results Total: ${totalToolResultChars} chars (~${estimateTokens(totalToolResultChars.toString())} tokens)`);
-    console.log(`📊 Total Follow-up Messages: ${followUpMessages.length}`);
-    const totalFollowupChars = followUpMessages.reduce((acc, msg) => acc + (msg.content?.length || 0), 0);
-    console.log(`🎯 ESTIMATED TOTAL INPUT (SECOND CALL): ~${estimateTokens(systemPrompt) + estimateTokens(JSON.stringify(tools)) + estimateTokens(totalFollowupChars.toString())} tokens`);
-    console.log(`=== END TOKEN ANALYSIS ===\n`);
 
     try {
       const followUpResponse = await openai.chat.completions.create({
@@ -908,20 +978,9 @@ function getNaturalTools(gapAnalysis: any): any[] {
         max_tokens: 1500,
       });
 
-      // LOG OPENAI USAGE RESPONSE FOR SECOND CALL
-      if (followUpResponse.usage) {
-        console.log(`\n🤖 OPENAI USAGE (SECOND CALL):`);
-        console.log(`   Prompt tokens: ${followUpResponse.usage.prompt_tokens}`);
-        console.log(`   Completion tokens: ${followUpResponse.usage.completion_tokens}`);
-        console.log(`   Total tokens: ${followUpResponse.usage.total_tokens}`);
-        console.log(`   Model: ${followUpResponse.model}`);
-        console.log(`\n💰 COMBINED USAGE BOTH CALLS:`);
-        const totalPromptTokens = (response.usage?.prompt_tokens || 0) + (followUpResponse.usage.prompt_tokens || 0);
-        const totalCompletionTokens = (response.usage?.completion_tokens || 0) + (followUpResponse.usage.completion_tokens || 0);
-        const totalTokens = (response.usage?.total_tokens || 0) + (followUpResponse.usage.total_tokens || 0);
-        console.log(`   Total Prompt tokens: ${totalPromptTokens}`);
-        console.log(`   Total Completion tokens: ${totalCompletionTokens}`);
-        console.log(`   TOTAL TOKENS: ${totalTokens}\n`);
+      if (followUpResponse.usage && response.usage) {
+        const totalTokens = response.usage.total_tokens + followUpResponse.usage.total_tokens;
+        console.log(`💰 Combined Usage: ${totalTokens} tokens`);
       }
       
       const finalMessage = followUpResponse.choices[0]?.message?.content || 

@@ -14,29 +14,118 @@ export interface NaturalRAGData {
   portfolioExamples?: string;
 }
 
+interface CurrentConversationContext {
+  name?: string;
+  company?: string;
+  email?: string;
+  painPoint?: string;
+  catalyst?: string;
+  successVision?: string;
+}
+
+function parseCurrentConversation(messages: any[]): CurrentConversationContext {
+  const context: CurrentConversationContext = {};
+  
+  // Combine all user messages for parsing
+  const userMessages = messages
+    .filter(msg => msg.role === 'user')
+    .map(msg => msg.content)
+    .join(' ');
+    
+  const text = userMessages.toLowerCase();
+  
+  // Extract name patterns
+  const namePatterns = [
+    /i'm ([a-zA-Z]+)/,
+    /i am ([a-zA-Z]+)/,
+    /my name is ([a-zA-Z]+)/,
+    /this is ([a-zA-Z]+)/,
+    /hi[,]? i'm ([a-zA-Z]+)/,
+    /hello[,]? i'm ([a-zA-Z]+)/,
+  ];
+  
+  for (const pattern of namePatterns) {
+    const match = text.match(pattern);
+    if (match && match[1] && match[1].length > 1) {
+      context.name = match[1];
+      break;
+    }
+  }
+  
+  // Extract company patterns
+  const companyPatterns = [
+    /from ([a-zA-Z0-9\s]+?)(?:\s|$)/,
+    /at ([a-zA-Z0-9\s]+?)(?:\s|$)/,
+    /work for ([a-zA-Z0-9\s]+?)(?:\s|$)/,
+    /company ([a-zA-Z0-9\s]+?)(?:\s|$)/,
+  ];
+  
+  for (const pattern of companyPatterns) {
+    const match = text.match(pattern);
+    if (match && match[1] && match[1].trim().length > 2) {
+      context.company = match[1].trim();
+      break;
+    }
+  }
+  
+  // Extract pain point indicators
+  const painIndicators = [
+    'challenge', 'problem', 'issue', 'struggle', 'difficulty',
+    'pain', 'frustration', 'bottleneck', 'blocker', 'obstacle',
+    'inefficient', 'manual', 'time-consuming', 'expensive'
+  ];
+  
+  if (painIndicators.some(indicator => text.includes(indicator))) {
+    context.painPoint = 'mentioned in conversation';
+  }
+  
+  // Extract catalyst indicators  
+  const catalystIndicators = [
+    'urgent', 'asap', 'immediately', 'quickly', 'soon',
+    'deadline', 'timeline', 'launch', 'project', 'initiative',
+    'need to', 'have to', 'must', 'required'
+  ];
+  
+  if (catalystIndicators.some(indicator => text.includes(indicator))) {
+    context.catalyst = 'mentioned in conversation';
+  }
+  
+  // Extract email patterns
+  const emailPattern = /([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/;
+  const emailMatch = text.match(emailPattern);
+  if (emailMatch) {
+    context.email = emailMatch[1];
+  }
+  
+  return context;
+}
+
 // Replace rigid pattern matching with gap analysis
-export function analyzeInformationGaps(sessionState?: SessionState): InformationGaps {
+export function analyzeInformationGaps(sessionState?: SessionState, currentMessages?: any[]): InformationGaps {
   const contact = sessionState?.contactInfo || {};
   const discovery = sessionState?.discoveryContext || {};
   const qualification = sessionState?.qualificationStatus;
   
-  // What contact info is missing?
-  const contactGaps = [];
-  if (!contact.name && !contact.contactName) contactGaps.push('name');
-  if (!contact.company) contactGaps.push('company');
-  if (!contact.email && !contact.contactEmail) contactGaps.push('email');
+  // Parse current conversation for immediate context
+  const currentContext = parseCurrentConversation(currentMessages || []);
   
-  // What business context is missing?
+  // What contact info is missing? (Check both session state AND current conversation)
+  const contactGaps = [];
+  if (!contact.name && !contact.contactName && !currentContext.name) contactGaps.push('name');
+  if (!contact.company && !currentContext.company) contactGaps.push('company');
+  if (!contact.email && !contact.contactEmail && !currentContext.email) contactGaps.push('email');
+  
+  // What business context is missing? (Check both session state AND current conversation)
   const contextGaps = [];
-  if (!discovery.painPoint) contextGaps.push('business_challenge');
-  if (!discovery.catalyst) contextGaps.push('urgency_reason');
-  if (!discovery.successVision) contextGaps.push('desired_outcome');
+  if (!discovery.painPoint && !currentContext.painPoint) contextGaps.push('business_challenge');
+  if (!discovery.catalyst && !currentContext.catalyst) contextGaps.push('urgency_reason');
+  if (!discovery.successVision && !currentContext.successVision) contextGaps.push('desired_outcome');
   
   // What project details are missing?
   const projectGaps = [];
   if (!discovery.projectScope) projectGaps.push('project_scope');
   if (!sessionState?.projectContext?.timeline) projectGaps.push('timeline');
-  if (!sessionState?.projectContext?.budgetSignals?.length) projectGaps.push('budget_signals');
+  // Removed budget_signals - not needed for qualification
   
   // What qualification info is missing?
   const qualificationGaps = [];
@@ -51,7 +140,8 @@ export function analyzeInformationGaps(sessionState?: SessionState): Information
     readinessLevel = 'ready';
   } else if (contactGaps.length <= 1 && contextGaps.length <= 1) {
     readinessLevel = 'interested';  
-  } else if (discovery.painPoint || contact.name || contact.contactName) {
+  } else if (discovery.painPoint || contact.name || contact.contactName || 
+             currentContext.painPoint || currentContext.name) {
     readinessLevel = 'interested';
   }
   
@@ -121,6 +211,12 @@ PRIMARY GOALS (in order):
 3. CAPTURE LEADS: Get complete contact and qualification info for pipeline management
 4. DEMONSTRATE AI: Show Joel's capabilities through this interaction
 
+GABI IMPLEMENTATION PRICING:
+- Standard Package: $200-500/month depending on complexity
+- Implementation Timeline: 1 week from kickoff
+- Includes: Custom training, integration setup, ongoing optimization
+- When asked about pricing: Share this information directly, then push to scheduling
+
 QUALIFICATION TRIGGERS:
 - When you have company + role + challenge → ALWAYS call assess_fit_naturally
 - When user mentions scheduling/meetings → ALWAYS call check_calendar_availability
@@ -185,7 +281,7 @@ WHAT YOU KNOW:`;
   // Add qualification objectives if scoring criteria available
   if (scoringCriteria) {
     prompt += `\n\nQUALIFICATION OBJECTIVES (extract in 3-4 turns):
-- AUTHORITY: Role, decision-making power, budget ownership
+- AUTHORITY: Role, decision-making power
 - PAIN: Specific problem, quantifiable impact, current cost  
 - CATALYST: Urgency driver, timeline pressure, change event
 - SCOPE: Team size, revenue scale, project complexity

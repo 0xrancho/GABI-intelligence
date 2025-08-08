@@ -552,13 +552,21 @@ async function handleCalendarBooking(args: any, sessionId?: string): Promise<str
       qualified: qualificationScore >= 7
     };
     
-    // Create the meeting
+    // Create the meeting directly with Google Calendar API
     const startDateTime = new Date(args.start_time);
     const endDateTime = new Date(startDateTime.getTime() + args.duration * 60 * 1000);
     
+    console.log('📅 Creating event with:', {
+      startTime: startDateTime.toISOString(),
+      endTime: endDateTime.toISOString(),
+      attendeeEmail: args.attendee_email,
+      attendeeName: args.attendee_name
+    });
+    
+    // Create event using the calendar service
     const eventDetails = {
-      summary: `Meeting with ${args.attendee_name}${args.company ? ` (${args.company})` : ''}`,
-      description: args.purpose || 'Strategic consultation',
+      summary: `GABI Lead: ${args.attendee_name} - ${args.company || 'Meeting'}`,
+      description: `Meeting with ${args.attendee_name}${args.company ? ` from ${args.company}` : ''}\n\nDuration: ${args.duration} minutes\nContact: ${args.attendee_email}`,
       startDateTime,
       endDateTime,
       attendeeEmail: args.attendee_email,
@@ -566,12 +574,13 @@ async function handleCalendarBooking(args: any, sessionId?: string): Promise<str
       duration: args.duration as 30 | 60,
       qualificationScore,
       company: args.company,
-      purpose: args.purpose,
+      purpose: args.purpose || 'Strategic consultation',
       conversationSummary: session.discoveryContext ? 
         `Challenge: ${session.discoveryContext.painPoint || 'N/A'}\nUrgency: ${session.discoveryContext.catalyst || 'N/A'}` : 
         undefined
     };
     
+    console.log('📅 Calling calendarService.createEvent with:', eventDetails);
     const result = await calendarService.createEvent(eventDetails);
     console.log('📅 BOOKING SUCCESS:', {
       eventId: result.eventId,
@@ -580,15 +589,20 @@ async function handleCalendarBooking(args: any, sessionId?: string): Promise<str
       hasMeetLink: !!result.meetLink
     });
     
+    // Extract event details from response
+    const eventId = result.eventId;
+    const calendarLink = result.calendarLink;
+    const meetLink = result.meetLink;
+    
     // Update session with booking info
     if (session) {
       session.schedulingContext = {
         context: 'Meeting booked successfully',
         meetingType: 'consultation',
         suggestedDuration: args.duration,
-        eventId: result.eventId,
-        calendarLink: result.calendarLink,
-        meetLink: result.meetLink
+        eventId: eventId,
+        calendarLink: calendarLink,
+        meetLink: meetLink
       };
       sessionManager.updateSession(sessionId, session);
     }
@@ -603,9 +617,9 @@ async function handleCalendarBooking(args: any, sessionId?: string): Promise<str
     });
     
     return `Perfect! Your ${args.duration}-minute meeting with Joel is confirmed for ${meetingTime} ET.\n\n` +
-      `📅 Calendar link: ${result.calendarLink}\n` +
-      `💻 Meeting link: ${result.meetLink}\n\n` +
-      `You'll receive a calendar invitation shortly. Looking forward to the conversation!`;
+      `📅 Calendar link: ${calendarLink}\n` +
+      `💻 Meeting link: ${meetLink || 'Google Meet link will be in the invite'}\n\n` +
+      `You'll receive a calendar invitation shortly at ${args.attendee_email}. Looking forward to the conversation!`;
     
   } catch (error) {
     console.error('Calendar booking error:', error);

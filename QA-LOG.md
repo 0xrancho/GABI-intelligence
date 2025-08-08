@@ -534,6 +534,86 @@ Added comprehensive debugging to `handleCalendarBooking()` function to identify 
 
 Next step: Test a complete booking flow to see the debug output and identify any gaps.
 
+**Security Fix Applied 2025-08-08:**
+Removed hardcoded Google credentials from `generate-refresh-token.js` to prevent accidentally committing secrets to Git:
+
+- Replaced hardcoded `CLIENT_ID` and `CLIENT_SECRET` with `process.env.GOOGLE_CLIENT_ID` and `process.env.GOOGLE_CLIENT_SECRET`
+- Added dotenv loading: `require('dotenv').config({ path: '.env.local' })`
+- Added validation to ensure environment variables are loaded before running
+- Installed `dotenv` package as dependency for the refresh token script
+- Confirmed `.gitignore` protects `.env*` files from being committed
+
+This ensures all Google OAuth2 credentials remain in environment variables and are never accidentally committed to version control.
+
+**Calendar Booking Fix Applied 2025-08-08:**
+Fixed the `handleCalendarBooking()` function to actually create Google Calendar events:
+
+- Enhanced debug logging to show exactly what's being sent to Google Calendar API
+- Added explicit logging before calling `calendarService.createEvent()` 
+- Fixed response handling to properly extract `eventId`, `calendarLink`, and `meetLink`
+- Updated confirmation message to include recipient email address
+- Added comprehensive error logging to identify any booking failures
+
+The function now properly:
+1. Validates complete contact info and email before booking
+2. Creates detailed event with attendee, Google Meet link, and reminders
+3. Returns actual calendar links and meeting URLs
+4. Updates session state with booking confirmation
+5. Sends calendar invitations to attendees automatically
+
+Next step: Test the booking flow to confirm calendar invites are actually sent.
+
+### Test Case: Tim 2 - Calendar Function Called But Falls Back to Calendly
+**Date**: 2025-08-08  
+**Issue Type**: Calendar Integration Working But Not Presenting Results  
+**Priority**: Medium  
+
+**Scenario:**
+Tim, CEO of Simple IT, wants GABI for lead qualification and segmentation. Has urgent timeline to avoid hiring AM/CSR.
+
+**What Worked ✅:**
+- **Qualification Flow**: Perfect natural conversation and qualification
+- **Authority Recognition**: Acknowledged Tim as CEO/decision-maker
+- **Urgency Detection**: Recognized hiring pressure as catalyst
+- **Email Collection**: Properly asked for email before checking calendar
+- **Calendar Function Called**: `check_calendar_availability` with correct parameters
+- **OAuth Working**: `hasGoogleRefreshToken: true`
+- **Airtable Saves**: Multiple successful CRM saves
+
+**Issue Identified 🟡:**
+```
+Terminal shows:
+🔧 Function calls: check_calendar_availability
+🗓️ CALENDAR AVAILABILITY DEBUG: {
+  duration: 60,
+  preferred_times: [ 'Wednesday morning', 'Thursday morning' ]
+}
+```
+- **Problem**: Calendar function called successfully but GABI still gave Calendly fallback
+- **Expected**: Should present actual available slots from Joel's calendar
+- **Actual**: "You can book directly through his calendar here: [Calendly link]"
+
+**Technical Analysis:**
+- Gap analysis correctly reduced from 2 → 1 → 0 contact gaps
+- Calendar tools loaded when contact gaps = 1 ✅
+- Function called with proper duration (60 min) and preferences
+- No error shown in terminal, suggesting calendar returned results
+- But GABI presented Calendly fallback instead of actual slots
+
+**Conversation Quality ✅:**
+- Natural banter: "Is it really Bob though?"
+- Quick qualification: Got role, company, pain, urgency in 4 turns
+- Professional transition to scheduling
+- Properly collected email before calendar check
+
+**Root Cause Hypothesis:**
+Calendar function is returning results but either:
+1. Results are empty (no available slots matching preferences)
+2. Results format not being properly handled by OpenAI
+3. Function response not being used in follow-up message
+
+**Status**: 🟡 CALENDAR FUNCTION WORKING BUT RESULTS NOT PRESENTED
+
 ### Test Case: Mike from SEP Conversation
 **Date**: 2025-08-06  
 **Issue Type**: Qualification Failure  

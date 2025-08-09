@@ -734,6 +734,117 @@ Implemented a simplified email-first collection pattern that eliminates complex 
 
 This eliminates the complex session state validation and makes scheduling much more user-friendly.
 
+**CRITICAL FIXES Applied 2025-08-08 (Aaron Test Case):**
+Fixed the missing pieces that prevented email collection and scheduling detection:
+
+## Fixed Issues
+
+### 1. **Email Collection Protocol NOW IN SYSTEM PROMPT** ✅
+Added to `conversationIntelligence.ts` (lines 240-268):
+```
+CRITICAL: After responding to the user's FIRST message, ALWAYS add a follow-up asking for their email.
+Pattern:
+1. Respond naturally to what they said
+2. Send a SEPARATE follow-up: "In case we get disconnected, what's your email?"
+```
+This was MISSING and is why GABI never asked Aaron for his email.
+
+### 2. **Expanded Scheduling Detection** ✅
+**OLD**: Only detected 'schedule', 'book', 'calendar', 'meeting'
+**NEW**: Detects:
+- Keywords: schedule, book, calendar, meeting, available, free, meet, call, chat
+- Time indicators: monday-friday, tomorrow, next week, am/pm
+- Time patterns: "11am", "2:30pm", "next Wednesday"
+
+Aaron's "I am free next Wednesday at 11a" now triggers scheduling detection!
+
+### 3. **Simplified Calendar Tool Loading** ✅
+**OLD**: Complex conditions with assessmentStatus and contactGaps
+**NEW**: Simple logic - load if scheduling intent OR has email
+```javascript
+const shouldLoadCalendarTools = hasSchedulingIntent || hasEmail;
+```
+
+### 4. **Better Debug Logging** ✅
+```javascript
+console.log('🔧 Calendar tools:', {
+  loading: shouldLoadCalendarTools,
+  reason: hasSchedulingIntent ? 'scheduling_intent' : hasEmail ? 'has_email' : 'none'
+});
+```
+
+## Test Case: Aaron from New Story
+**Expected Behavior NOW**:
+1. User: "Hi I'm Aaron from New Story"
+2. GABI: "Aaron! New Story - love the mission-driven work. What brings you here?"
+3. GABI: "By the way, what's your email? (In case we get disconnected)"
+4. User: "aaron@newstory.com"
+5. User: "I am free next Wednesday at 11a"
+6. GABI: [Detects scheduling intent, shows availability, books meeting]
+
+**What Was Fixed**:
+- ✅ Email collection protocol added to system prompt
+- ✅ "free next Wednesday at 11a" now triggers scheduling detection
+- ✅ Calendar tools load with just email OR scheduling intent
+- ✅ No more complex validation gates
+
+The system should now work as designed with the email-first approach!
+
+### Test Case: Doug from Blackink IT - Calendar Works But Defaulted to Calendly First
+**Date**: 2025-08-08  
+**Issue Type**: Calendar Integration Working But Calendly Given First  
+**Priority**: HIGH  
+
+**Scenario:**
+Doug, CEO of Blackink IT, curious about GABI vs GPT Teams for relationship-based sales. Wanted to understand integration capabilities and book a meeting.
+
+**What Worked ✅:**
+1. **Email Collection**: GABI correctly asked for email after first interaction
+2. **Calendar Tools Loaded**: After email collected, tools loaded (reason: 'has_email')
+3. **Qualification Flow**: Natural conversation about needs and capabilities
+4. **Calendar Check**: When explicitly requested, returned real availability slots
+5. **Successful Booking**: Created actual calendar events with Meet links
+6. **Airtable Saves**: Records saved correctly (though error message appeared)
+
+**Critical Issue 🔴:**
+
+**CALENDLY FALLBACK GIVEN FIRST Despite Calendar Tools Available**
+```
+Terminal: 🔧 Calendar tools: { loading: 'douga@blckinkit.com', reason: 'has_email' }
+GABI: "Here's Joel's calendar link: [Calendly]"
+Doug: "Wait this isn't a calendar integration? You said you could schedule for us?"
+GABI: [Finally checks actual calendar and shows real slots]
+```
+- **Problem**: GABI defaulted to Calendly even though calendar tools were loaded and working
+- **User Impact**: Confusion about promised vs actual capabilities - breaks trust
+- **Root Cause**: System prompt not clear enough about ALWAYS using calendar tools when available
+
+**Minor Issues:**
+
+**Double Booking**
+- Created separate events for each email instead of updating/canceling first
+- Event IDs: `i8mod9t11ro54a2p5e01dh1rdo` and `98c9pg7hgs7p08ac96fra2jnis`
+- Should upsert based on session, not create new
+
+**Technical Analysis:**
+- Email-first approach worked perfectly ✅
+- Calendar tools loaded immediately after email ✅
+- Calendar integration technically works ✅
+- But GABI's decision-making defaulted to Calendly ❌
+
+**Key Learning:**
+The system WORKS but GABI needs explicit instructions: "When calendar tools are loaded, ALWAYS use check_calendar_availability, NEVER give Calendly link directly."
+
+**Success Metrics:**
+- ✅ Email collected in message 2
+- ✅ Calendar tools available from message 3 onward
+- ✅ Real calendar events created with Meet links
+- ✅ Airtable records saved (despite error message)
+- ❌ Should have offered calendar directly, not Calendly first
+
+**Fix Needed:**
+Update system prompt to emphasize: "If calendar tools are available, you MUST use them. Only give Calendly as last resort."
+
 ### Test Case: Mike from SEP Conversation
 **Date**: 2025-08-06  
 **Issue Type**: Qualification Failure  

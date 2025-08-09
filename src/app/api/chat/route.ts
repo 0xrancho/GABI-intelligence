@@ -512,137 +512,141 @@ async function handleCalendarAvailability(args: any, sessionId?: string): Promis
 }
 
 async function handleCalendarBooking(args: any, sessionId?: string): Promise<string> {
-  console.log('📅 BOOKING ATTEMPT:', {
-    args,
-    sessionId,
-    hasGoogleRefreshToken: !!process.env.GOOGLE_REFRESH_TOKEN,
-    googleCalendarId: process.env.GOOGLE_CALENDAR_ID
-  });
+  console.log('🎯 CALENDAR BOOKING STARTED:', args);
   
-  if (!sessionId) return 'I need a bit more information to book the meeting.';
+  // Extract everything from args (OpenAI already validated these)
+  const { 
+    attendee_name = 'Guest', // Default if somehow missing
+    attendee_email,
+    company,
+    start_time,
+    duration = 30,
+    role,
+    team_size,
+    pain_points = [],
+    current_tools = [],
+    timeline,
+    budget_range,
+    project_context = 'Meeting scheduled via GABI'
+  } = args;
+
+  // Only check for absolute minimum
+  if (!attendee_email || !start_time) {
+    console.error('❌ Missing critical booking data:', { attendee_email, start_time });
+    return JSON.stringify({
+      success: false,
+      message: "I need your email and the meeting time. What's your email?"
+    });
+  }
+
+  console.log('✅ Booking meeting with email:', attendee_email);
 
   try {
-    const { sessionManager } = await import('@/lib/leadCapture');
+    // Initialize calendar service
     const { calendarService } = await import('@/lib/googleCalendar');
     
-    const session = sessionManager.getSession(sessionId);
-    console.log('📅 Session data:', {
-      hasSession: !!session,
-      contactInfo: session?.contactInfo,
-      hasCompleteInfo: hasCompleteContactInfo(session)
-    });
+    // Parse dates
+    const startDate = new Date(start_time);
+    const endDate = new Date(startDate.getTime() + (duration * 60000));
     
-    // Verify we have complete contact info
-    if (!hasCompleteContactInfo(session)) {
-      return 'I need your full name, email, and company to book the meeting. Can you share those details?';
-    }
-    
-    // Also verify the function arguments have required email
-    if (!args.attendee_email || !args.attendee_email.includes('@')) {
-      return 'I need your email address to send the calendar invitation. What\'s the best email to use?';
-    }
-    
-    const qualificationScore = calculateQualificationScore(session);
-    const contact = session.contactInfo;
-    
-    // User context for fallback
-    const userContext = {
-      name: args.attendee_name,
-      company: args.company,
-      qualified: qualificationScore >= 7
+    // Build rich description from whatever context we have
+    const eventDescription = `
+Meeting with ${attendee_name}${company ? ` from ${company}` : ''}
+${role ? `Role: ${role}` : ''}
+${team_size ? `Team Size: ${team_size}` : ''}
+
+${pain_points.length > 0 ? `Pain Points:\n${pain_points.map(p => `- ${p}`).join('\n')}` : ''}
+
+${project_context ? `Context:\n${project_context}` : ''}
+
+${timeline ? `Timeline: ${timeline}` : ''}
+${budget_range ? `Budget: ${budget_range}` : ''}
+
+Contact: ${attendee_email}
+Booked via: GABI Intelligent Qualification
+`.trim();
+
+    // Create the actual calendar event
+    const event = {
+      summary: `${attendee_name}${company ? ` - ${company}` : ''} (GABI Lead)`,
+      description: eventDescription,
+      start: {
+        dateTime: startDate.toISOString(),
+        timeZone: 'America/New_York',
+      },
+      end: {
+        dateTime: endDate.toISOString(),
+        timeZone: 'America/New_York',
+      },
+      attendees: [
+        { email: attendee_email },
+        { email: 'joel@commitimpact.com' }
+      ],
+      conferenceData: {
+        createRequest: {
+          requestId: `gabi-${Date.now()}`,
+          conferenceSolutionKey: { type: 'hangoutsMeet' }
+        }
+      }
     };
-    
-    // Create the meeting directly with Google Calendar API
-    const startDateTime = new Date(args.start_time);
-    const endDateTime = new Date(startDateTime.getTime() + args.duration * 60 * 1000);
-    
-    console.log('📅 Creating event with:', {
-      startTime: startDateTime.toISOString(),
-      endTime: endDateTime.toISOString(),
-      attendeeEmail: args.attendee_email,
-      attendeeName: args.attendee_name
+
+    console.log('📅 Creating calendar event:', {
+      title: event.summary,
+      start: startDate.toLocaleString(),
+      attendees: event.attendees.map(a => a.email)
     });
-    
-    // Create event using the calendar service
-    const eventDetails = {
-      summary: `GABI Lead: ${args.attendee_name} - ${args.company || 'Meeting'}`,
-      description: `Meeting with ${args.attendee_name}${args.company ? ` from ${args.company}` : ''}\n\nDuration: ${args.duration} minutes\nContact: ${args.attendee_email}`,
-      startDateTime,
-      endDateTime,
-      attendeeEmail: args.attendee_email,
-      attendeeName: args.attendee_name,
-      duration: args.duration as 30 | 60,
-      qualificationScore,
-      company: args.company,
-      purpose: args.purpose || 'Strategic consultation',
-      conversationSummary: session.discoveryContext ? 
-        `Challenge: ${session.discoveryContext.painPoint || 'N/A'}\nUrgency: ${session.discoveryContext.catalyst || 'N/A'}` : 
-        undefined
+
+    const createdEvent = await calendarService.calendarAPI.events.insert({
+      calendarId: process.env.GOOGLE_CALENDAR_ID || 'joel@commitimpact.com',
+      resource: event,
+      conferenceDataVersion: 1,
+      sendNotifications: true  // Sends invites to attendees
+    });
+
+    // Update Airtable asynchronously (don't block the booking)
+    const leadData = {
+      email: attendee_email,
+      name: attendee_name || 'Not provided',
+      company: company || 'TBD',
+      role: role || null,
+      team_size: team_size || null,
+      pain_points: Array.isArray(pain_points) ? pain_points.join(', ') : pain_points || null,
+      current_tools: Array.isArray(current_tools) ? current_tools.join(', ') : current_tools || null,
+      timeline: timeline || null,
+      budget_range: budget_range || null,
+      interest_level: 'hot', // They booked = hot
+      assessment_status: 'qualified',
+      meeting_scheduled: true,
+      meeting_date: start_time,
+      conversation_summary: project_context,
+      next_steps: 'Meeting scheduled',
+      last_interaction: new Date().toISOString()
     };
-    
-    console.log('📅 Calling calendarService.createEvent with:', eventDetails);
-    const result = await calendarService.createEvent(eventDetails);
-    console.log('📅 BOOKING SUCCESS:', {
-      eventId: result.eventId,
-      status: result.status,
-      hasCalendarLink: !!result.calendarLink,
-      hasMeetLink: !!result.meetLink
-    });
-    
-    // Extract event details from response
-    const eventId = result.eventId;
-    const calendarLink = result.calendarLink;
-    const meetLink = result.meetLink;
-    
-    // Update session with booking info
-    if (session) {
-      session.schedulingContext = {
-        context: 'Meeting booked successfully',
-        meetingType: 'consultation',
-        suggestedDuration: args.duration,
-        eventId: eventId,
-        calendarLink: calendarLink,
-        meetLink: meetLink
-      };
-      sessionManager.updateSession(sessionId, session);
-    }
-    
-    const meetingTime = startDateTime.toLocaleString('en-US', {
-      weekday: 'long',
-      month: 'long',
-      day: 'numeric',
-      hour: 'numeric',
-      minute: '2-digit',
-      timeZone: 'America/New_York'
-    });
-    
-    return `Perfect! Your ${args.duration}-minute meeting with Joel is confirmed for ${meetingTime} ET.\n\n` +
-      `📅 Calendar link: ${calendarLink}\n` +
-      `💻 Meeting link: ${meetLink || 'Google Meet link will be in the invite'}\n\n` +
-      `You'll receive a calendar invitation shortly at ${args.attendee_email}. Looking forward to the conversation!`;
-    
-  } catch (error) {
-    console.error('Calendar booking error:', error);
-    
-    if (error.message?.includes('INSUFFICIENT_QUALIFICATION')) {
-      const { calendlyFallback } = await import('@/lib/calendlyFallback');
-      const fallback = calendlyFallback.getContextualMessage('good_fit', {
-        name: args.attendee_name,
-        company: args.company
+
+    // Save to Airtable async
+    try {
+      const airtable = new (await import('@/lib/airtableClient')).AirtableClient();
+      airtable.saveLead(leadData).catch(error => {
+        console.error('Airtable update failed (non-blocking):', error);
       });
-      return `For 60-minute strategic sessions, I need to understand your project better first. Let's start with a 30-minute conversation:\n\n${fallback}`;
+    } catch (airtableError) {
+      console.error('Airtable initialization failed (non-blocking):', airtableError);
     }
-    
-    // Use Calendly fallback on general booking errors
-    const { handleCalendarError } = await import('@/lib/calendlyFallback');
-    const userContext = {
-      name: args.attendee_name,
-      company: args.company,
-      qualified: calculateQualificationScore(sessionManager.getSession(sessionId)) >= 7
-    };
-    
-    const fallback = handleCalendarError(error, userContext);
-    return fallback.message;
+
+    return JSON.stringify({
+      success: true,
+      eventId: createdEvent.data.id,
+      eventLink: createdEvent.data.htmlLink,
+      meetLink: createdEvent.data.conferenceData?.entryPoints?.[0]?.uri || 'Will be in calendar invite',
+      message: `Perfect! I've booked your meeting with Joel for ${startDate.toLocaleDateString()} at ${startDate.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}. You'll receive a calendar invite at ${attendee_email} shortly.`
+    });
+
+  } catch (error) {
+    console.error('❌ Calendar booking failed:', error);
+    return JSON.stringify({
+      success: false,
+      message: "I encountered an issue with the calendar system. Could you email Joel directly at joel@commitimpact.com? I'll make sure he knows you tried to book."
+    });
   }
 }
 
@@ -688,10 +692,21 @@ async function handleAgenticConversation(
   const ragData = await loadNaturalRAGData(gapAnalysis, context.sessionState);
   
   // Build natural, descriptive system prompt
-  const systemPrompt = buildNaturalSystemPrompt(gapAnalysis, context.sessionState, ragData, scoringCriteria);
+  const todaysDate = new Date().toLocaleDateString('en-US', { 
+    weekday: 'long', 
+    year: 'numeric', 
+    month: 'long', 
+    day: 'numeric' 
+  });
+  
+  const systemPrompt = buildNaturalSystemPrompt(gapAnalysis, context.sessionState, ragData, scoringCriteria) + 
+    `\n\nIMPORTANT: Today is ${todaysDate}. When generating dates:\n` +
+    `- Use correct year (2025, not 2023 or 2024)\n` +
+    `- Convert times like "Monday at 9:30am" to "2025-MM-DDTHH:mm:00" format\n` +
+    `- Use 24-hour format for times (9:30am = 09:30)\n`;
   
   // Load contextually appropriate tools
-  const tools = getNaturalTools(gapAnalysis);
+  const tools = getNaturalTools(gapAnalysis, context);
   
   // Token usage analysis
   const tokenAnalysis = estimateNaturalTokenUsage(systemPrompt, ragData, tools.length);
@@ -704,10 +719,32 @@ async function handleAgenticConversation(
   ];
 
 // NATURAL ALWAYS-AVAILABLE TOOLS
-function getNaturalTools(gapAnalysis: any): any[] {
-  const calendarToolsCondition = (gapAnalysis.readinessLevel === 'ready' || gapAnalysis.readinessLevel === 'interested') && gapAnalysis.contactGaps.length <= 2;
-  
-  console.log(`📊 Gap Analysis: ${gapAnalysis.readinessLevel} | Contact gaps: ${gapAnalysis.contactGaps.length} | Calendar tools: ${calendarToolsCondition ? '✅' : '❌'}`);
+function getNaturalTools(gapAnalysis: any, context?: any): any[] {
+  // Load calendar tools if:
+  // 1. User explicitly wants to schedule OR
+  // 2. We have their email (from upfront collection) and they seem interested
+  const normalizedMessage = context?.messages?.[context.messages.length - 1]?.content?.toLowerCase() || '';
+  const hasSchedulingIntent = 
+    normalizedMessage.includes('schedule') || 
+    normalizedMessage.includes('book') ||
+    normalizedMessage.includes('calendar') ||
+    normalizedMessage.includes('meeting') ||
+    normalizedMessage.includes('available') ||
+    normalizedMessage.includes('meet with');
+
+  const hasEmail = context?.sessionState?.contactInfo?.email || 
+                   context?.sessionState?.contactInfo?.contactEmail ||
+                   context?.messages?.some(m => m.content?.includes('@'));
+
+  const shouldLoadCalendarTools = hasSchedulingIntent || hasEmail;
+
+  console.log('📅 Calendar tools check:', { 
+    hasSchedulingIntent, 
+    hasEmail, 
+    loading: shouldLoadCalendarTools 
+  });
+
+  console.log(`📊 Gap Analysis: ${gapAnalysis.readinessLevel} | Contact gaps: ${gapAnalysis.contactGaps.length} | Calendar tools: ${shouldLoadCalendarTools ? '✅' : '❌'}`);
   
   const tools = [];
 
@@ -799,7 +836,7 @@ function getNaturalTools(gapAnalysis: any): any[] {
   }
 
   // AVAILABLE WHEN QUALIFIED - Real Calendar Integration
-  if (calendarToolsCondition) {
+  if (shouldLoadCalendarTools) {
     tools.push({
       type: 'function',
       function: {
@@ -827,18 +864,62 @@ function getNaturalTools(gapAnalysis: any): any[] {
       type: 'function',
       function: {
         name: 'book_calendar_meeting',
-        description: 'Book an actual meeting on Joel\'s calendar ONLY after you have their email address and they\'ve selected a specific time slot. Always collect email first by asking "What\'s the best email to send the calendar invite to?"',
+        description: 'Book a meeting. Since we always collect email upfront, this should always work.',
         parameters: {
           type: 'object',
+          required: ['attendee_email', 'start_time'],  // Email is all we really need
           properties: {
-            attendee_name: { type: 'string', description: 'Full name' },
-            attendee_email: { type: 'string', description: 'Email address' },
-            company: { type: 'string', description: 'Company name' },
-            start_time: { type: 'string', description: 'ISO datetime string' },
-            duration: { type: 'number', enum: [30, 60] },
-            purpose: { type: 'string', description: 'Meeting purpose/agenda' }
-          },
-          required: ['attendee_name', 'attendee_email', 'start_time', 'duration']
+            // CORE REQUIREMENTS (we always have email from upfront collection)
+            attendee_email: { 
+              type: 'string',
+              description: 'Email address (already collected via safety question)'
+            },
+            start_time: { 
+              type: 'string',
+              description: 'ISO datetime for meeting start'
+            },
+            duration: { 
+              type: 'integer',
+              enum: [30, 60],
+              default: 30
+            },
+            
+            // EXTRACT FROM CONVERSATION (don't ask for these)
+            attendee_name: { 
+              type: 'string',
+              description: 'Their name if mentioned'
+            },
+            company: { 
+              type: 'string',
+              description: 'Company if mentioned'
+            },
+            role: { 
+              type: 'string',
+              description: 'Title/role if mentioned'
+            },
+            pain_points: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Problems like "long sales cycles", "no sales team"'
+            },
+            current_tools: {
+              type: 'array',
+              items: { type: 'string' }
+            },
+            timeline: {
+              type: 'string'
+            },
+            budget_range: {
+              type: 'string'
+            },
+            team_size: {
+              type: 'integer'
+            },
+            project_context: {
+              type: 'string',
+              description: 'Summary of their needs'
+            }
+          }
         }
       }
     });
@@ -953,6 +1034,34 @@ function getNaturalTools(gapAnalysis: any): any[] {
             toolResult = `Function ${functionName} processed.`;
         }
         
+        // Log the raw function result
+        console.log(`🔧 Function ${functionName} result:`, toolResult);
+        
+        // Parse JSON results if applicable
+        let parsedResult = null;
+        try {
+          if (typeof toolResult === 'string' && toolResult.startsWith('{')) {
+            parsedResult = JSON.parse(toolResult);
+            console.log(`📊 Parsed result:`, parsedResult);
+            
+            // Check for failures and log them prominently
+            if (parsedResult.success === false) {
+              console.error(`❌ FUNCTION FAILED: ${functionName}`, {
+                error: parsedResult.error,
+                fallback: parsedResult.fallback
+              });
+              
+              // Return honest error message to user
+              toolResult = parsedResult.fallback || `I encountered an issue: ${parsedResult.error}. Please email Joel at joel@commitimpact.com`;
+            } else if (parsedResult.success === true && parsedResult.message) {
+              // Use the success message
+              toolResult = parsedResult.message;
+            }
+          }
+        } catch (parseError) {
+          console.log('Result is not JSON, using as-is');
+        }
+        
         // Add tool response for this specific call
         toolResponses.push({
           role: 'tool',
@@ -961,11 +1070,11 @@ function getNaturalTools(gapAnalysis: any): any[] {
         });
         
       } catch (error) {
-        console.error(`Error handling function ${functionName}:`, error);
+        console.error(`❌ Error handling function ${functionName}:`, error);
         toolResponses.push({
           role: 'tool',
           tool_call_id: toolCall.id,
-          content: `Error processing ${functionName}`
+          content: `I encountered a technical issue. Please email Joel directly at joel@commitimpact.com or use https://calendly.com/joelaustin/30min`
         });
       }
     }

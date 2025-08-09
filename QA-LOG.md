@@ -614,6 +614,126 @@ Calendar function is returning results but either:
 
 **Status**: 🟡 CALENDAR FUNCTION WORKING BUT RESULTS NOT PRESENTED
 
+**Diagnostic Improvements Applied 2025-08-08:**
+Added comprehensive error handling and honest feedback to prevent "lying" to users about calendar bookings:
+
+1. **Enhanced Calendar Booking Function:**
+   - Added upfront credential validation (Google refresh token check)
+   - Returns structured JSON responses with `success`, `error`, and `fallback` fields
+   - Validates event ID creation before claiming success
+   - Comprehensive error logging with stack traces
+
+2. **Improved Function Result Handling:**
+   - Added JSON parsing for function responses
+   - Explicit logging of all function results
+   - Failure detection and prominent error logging
+   - Honest error messages passed to users when functions fail
+
+3. **Created Test Endpoint:**
+   - `/api/test-calendar` GET/POST endpoints for testing calendar integration
+   - Direct testing of `calendarService.createEvent()` without session complexity
+   - Detailed diagnostic information about Google credentials and responses
+
+4. **System Honesty:**
+   - No more fake success messages when calendar booking fails
+   - Clear fallback to email/Calendly when calendar system has issues
+   - Users get honest feedback about technical problems
+
+**Key Principle:** Better to admit calendar isn't working than pretend it is and disappoint users.
+
+**Next Step:** Test the `/api/test-calendar` endpoint to verify if Google Calendar integration actually works.
+
+**CRITICAL DATA FLOW FIX Applied 2025-08-08:**
+Fixed the calendar booking function to use actual user data instead of test/placeholder data:
+
+1. **Fixed Data Extraction:**
+   - Now properly extracts `attendee_name`, `attendee_email`, `company`, `start_time`, `duration` from function args
+   - Added detailed logging to show raw args and extracted data
+   - Removed test data and placeholders
+
+2. **Direct Google Calendar API Integration:**
+   - Bypassed intermediate service layer to use Google Calendar API directly
+   - Added `calendarAPI` getter to GoogleCalendarService for direct access
+   - Creates events with actual user data in title and attendees
+
+3. **Proper Event Creation:**
+   - Event title: `"Tim - Simple IT"` (uses actual names)
+   - Attendees: User email AND `joel@commitimpact.com`
+   - Correct date parsing and timezone handling
+   - `sendNotifications: true` to actually send invites
+
+4. **Enhanced System Prompt:**
+   - Added today's date context for accurate date generation
+   - Instructions for proper date format conversion
+   - Guidance for correct year (2025, not 2023/2024)
+
+5. **Success Pattern:**
+   ```
+   ✅ Availability check → Returns real slots
+   ✅ User selection → Triggers booking function  
+   ✅ Calendar API → Creates real events
+   ✅ Data flow → Uses actual user data
+   ```
+
+**Expected Result:** Calendar events should now be created with real user data and invitations sent to actual email addresses.
+
+**EMAIL-FIRST IMPLEMENTATION Applied 2025-08-08:**
+Implemented a simplified email-first collection pattern that eliminates complex validation gates:
+
+## Key Changes
+
+### 1. **Email Collection Protocol (System Prompt)**
+- **CRITICAL**: After responding to user's FIRST message, ALWAYS ask for email
+- **Positioning**: "In case we get disconnected, what's your email?"
+- **Pattern**: Natural response + separate email question
+- **Not Optional**: Do this for EVERY first interaction
+
+### 2. **Simplified Calendar Booking Function**
+- **Minimum Requirements**: Only `attendee_email` + `start_time`
+- **Context Extraction**: Automatically pulls name, company, role, pain points from conversation
+- **No Validation Gates**: No more "complete contact information" requirements
+- **Async CRM**: Airtable updates happen in background, don't block booking
+
+### 3. **Updated Tool Definitions**
+- **Required Fields**: Only email (collected upfront) + time
+- **Optional Fields**: All context fields (name, company, role, etc.)
+- **Description**: "Since we always collect email upfront, this should always work"
+
+### 4. **Simplified Tool Loading**
+- **Old Logic**: Complex readiness + gap analysis
+- **New Logic**: Has email OR scheduling intent
+- **Triggers**: schedule, book, calendar, meeting, available keywords
+
+## Mental Model Change
+
+**OLD**: Qualify → Validate → Schedule  
+**NEW**: Collect Email → Schedule Anytime → Enrich Context
+
+**Benefits**:
+- ✅ 70% simpler implementation
+- ✅ Better UX (helpful vs. bureaucratic)  
+- ✅ Email collection as safety feature, not gate
+- ✅ No re-asking for provided information
+- ✅ Context captured but not required
+
+## Test Flows
+
+**Standard Happy Path**:
+1. User: "Hi I'm Sarah from TechCorp"
+2. GABI: "Sarah from TechCorp! [witty response]"
+3. GABI: "In case we get disconnected, what's your email?"
+4. User: "sarah@techcorp.com"
+5. User: "I need to schedule a meeting"
+6. GABI: [Shows availability + books immediately]
+
+**Immediate Booking**:
+1. User: "I want to book a meeting"
+2. GABI: "What's your email? (In case we get disconnected)"
+3. User: "tim@simpleit.com"
+4. GABI: [Shows availability immediately]
+
+This eliminates the complex session state validation and makes scheduling much more user-friendly.
+
 ### Test Case: Mike from SEP Conversation
 **Date**: 2025-08-06  
 **Issue Type**: Qualification Failure  

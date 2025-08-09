@@ -101,6 +101,11 @@ export class GoogleCalendarService {
     return process.env.CALENDAR_TIMEZONE || 'America/New_York';
   }
   
+  // Expose calendar for direct API access
+  get calendarAPI() {
+    return this.calendar;
+  }
+  
   checkBookingEligibility(duration: 30 | 60, qualificationScore?: number): BookingEligibility {
     const threshold = this.getQualificationThreshold();
     const score = qualificationScore || 0;
